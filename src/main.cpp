@@ -73,7 +73,7 @@
 #endif
 
 #ifdef __APPLE__
-    #include <MacFunctions.h>
+#include <misc/MacFunctions.h>
 #endif
 
 #if !defined(__GNUG__) || (defined(_GLIBCXX_HAS_GTHREADS) && defined(_GLIBCXX_USE_C99_STDINT_TR1) && (ATOMIC_INT_LOCK_FREE > 1) && !defined(_GLIBCXX_HAS_GTHREADS))
@@ -250,7 +250,7 @@ void createDefaultConfigFile(const std::string& configfilepath, const std::strin
                                 "MetaServer = %s\n"
                                 "\n"
                                 "[AI]\n"
-                                "Campaign AI = qBotMedium\n"
+                                "Campaign AI = CampaignAIPlayer\n"
                                 "\n"
                                 "[Game Options]\n"
                                 "Game Speed = 16                         # The default speed of the game: 32 = very slow, 8 = very fast, 16 = default\n"
@@ -366,7 +366,6 @@ std::string getUserLanguage() {
         return strToLower(std::string(pLang, 2));
     }
 }
-
 
 
 int main(int argc, char *argv[]) {
@@ -576,7 +575,19 @@ int main(int argc, char *argv[]) {
             }
 
             if(bFirstInit == true) {
-                SDL_Log("Initializing SDL...");
+                SDL_Log("Initializing game...");
+
+                // Force OpenGL rendering on macOS
+                SDL_SetHint(SDL_HINT_RENDER_DRIVER, "opengl");
+                SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "1");
+                SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0");
+                SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
+                SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");
+                SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+                SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+                SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "0");  // Disable EGL
+                SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");      // Enable render batching
+                SDL_SetHint(SDL_HINT_RENDER_LINE_METHOD, "3");   // Best line rendering quality
 
                 if(SDL_Init(SDL_INIT_TIMER | SDL_INIT_VIDEO) < 0) {
                     THROW(sdl_error, "Couldn't initialize SDL: %s!", SDL_GetError());
