@@ -51,6 +51,10 @@ typedef int avoid_warning_that_ISO_C_forbids_an_empty_translation_unit;
 #include <sys/poll.h>
 #endif
 
+#ifdef __HAIKU__
+#define HAS_SOCKLEN_T 1
+#endif
+
 #ifndef HAS_SOCKLEN_T
 typedef int socklen_t;
 #endif

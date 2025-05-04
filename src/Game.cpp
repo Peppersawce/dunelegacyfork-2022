@@ -1094,7 +1094,9 @@ void Game::runMainLoop() {
 
         drawScreen();
 
+        #ifndef __HAIKU__
         SDL_RenderPresent(renderer);
+        #endif
 
         SDL_SetRenderTarget(renderer, nullptr);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);

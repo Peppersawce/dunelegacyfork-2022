@@ -40,6 +40,10 @@
 #include <vector>
 #include <utility>  // for std::pair
 
+#ifdef __HAIKU__
+#include <array>
+#endif
+
 // The fmt library version in the form major * 10000 + minor * 100 + patch.
 #define FMT_VERSION 30002
 

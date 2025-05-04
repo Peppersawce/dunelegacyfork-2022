@@ -19,6 +19,7 @@
 #include <misc/string_util.h>
 #include <misc/exceptions.h>
 #include <misc/SDL2pp.h>
+#include <config.h>
 
 #include <stdio.h>
 #include <algorithm>
