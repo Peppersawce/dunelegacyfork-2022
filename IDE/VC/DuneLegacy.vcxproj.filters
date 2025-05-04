@@ -945,6 +945,12 @@
     <ClInclude Include="..\..\include\FileClasses\TTFFont.h">
       <Filter>include\FileClasses</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\include\AITeamInfo.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\include\SpatialGrid.h">
+      <Filter>include</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\AStarSearch.cpp">
@@ -1567,6 +1573,9 @@
     </ClCompile>
     <ClCompile Include="..\..\src\players\CampaignAIPlayer.cpp">
       <Filter>src\players</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\src\SpatialGrid.cpp">
+      <Filter>src</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>

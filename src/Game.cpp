@@ -1116,12 +1116,12 @@ void Game::runMainLoop() {
         if (bShowFPS) {
             averageFrameTime = 0.99f * averageFrameTime + 0.01f * frameTime;
         }
-
+        /*
         if(settings.video.frameLimit == true) {
             if(frameTime < 32) {
                 SDL_Delay(32 - frameTime);
             }
-        }
+        }*/
 
         if(finished) {
             // end timer for the ending message

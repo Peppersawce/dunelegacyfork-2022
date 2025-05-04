@@ -15,9 +15,7 @@
  *  along with Dune Legacy.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef VERSION
-    #define VERSION "0.97.04"
-#endif
+#define VERSION "0.98.2"
 
 #ifndef PACKAGE
     #define PACKAGE "dunelegacy"

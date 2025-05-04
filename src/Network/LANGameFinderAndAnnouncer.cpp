@@ -190,7 +190,11 @@ void LANGameFinderAndAnnouncer::receivePackets() {
     if(receivedBytes==0) {
         // blocked
     } else if(receivedBytes < 0) {
-        THROW(std::runtime_error, "LANGameFinderAndAnnouncer: Receiving data failed!");
+        #ifdef __APPLE__
+                THROW(std::runtime_error, "LANGameFinderAndAnnouncer: Receiving data failed! On macOS, please ensure Dune Legacy has permission to access the local network. Go to System Settings > Privacy & Security > Local Network and enable access for Dune Legacy.");
+        #else
+                THROW(std::runtime_error, "LANGameFinderAndAnnouncer: Receiving data failed!");
+        #endif
     } else {
         if((receivedBytes == sizeof(NetworkPacket_AnnounceGame))
             && (SDL_SwapLE32(announcePacket.magicNumber) == LANGAME_ANNOUNCER_MAGICNUMBER)

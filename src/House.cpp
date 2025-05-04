@@ -915,3 +915,16 @@ void House::decrementHarvesters() {
         }
     }
 }
+
+int House::calculateMilitaryValue() const {
+    int value = 0;
+    for (Uint32 i = Unit_FirstID; i <= Unit_LastID; i++) {
+        if (i != Unit_Carryall
+            && i != Unit_Harvester
+            && i != Unit_MCV
+            && i != Unit_Sandworm) {
+            value += getNumItems(i) * currentGame->objectData.data[i][houseID].price;
+        }
+    }
+    return value;
+}

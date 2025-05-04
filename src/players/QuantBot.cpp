@@ -258,16 +258,7 @@ void QuantBot::update() {
 		}
 
 		// Calculate the total military value of the player
-		initialMilitaryValue = 0;
-		for (Uint32 i = Unit_FirstID; i <= Unit_LastID; i++) {
-			if (i != Unit_Carryall
-				&& i != Unit_Harvester
-				&& i != Unit_MCV
-				&& i != Unit_Sandworm) {
-				// Used for campaign mode.
-				initialMilitaryValue += initialItemCount[i] * currentGame->objectData.data[i][getHouse()->getHouseID()].price;
-			}
-		}
+		initialMilitaryValue = getHouse()->calculateMilitaryValue();
 
 
 
@@ -277,56 +268,56 @@ void QuantBot::update() {
 			switch (difficulty) {
 			case Difficulty::Easy: {
 				harvesterLimit = initialItemCount[Structure_Refinery];
+				militaryValueLimit = lround(initialMilitaryValue * 1.5_fix);
 				if (currentGame->getGameInitSettings().getMission() >= 21
-					&& initialMilitaryValue < 2000) {
-					militaryValueLimit = 2000;
+					&& militaryValueLimit < 3000) {
+					militaryValueLimit = 3000;
 				}
-				else {
-					militaryValueLimit = initialMilitaryValue;
-				}
-
-				logDebug("Easy Campaign  ");
+				logDebug("Easy Campaign  militaryValueLimit: %d, harvesterlimit	%d", militaryValueLimit, harvesterLimit);
 			} break;
 
 			case Difficulty::Medium: {
+				if (initialItemCount[Structure_Refinery] < 2) {
+					initialItemCount[Structure_Refinery] = 2;
+				}
 				harvesterLimit = 2 * initialItemCount[Structure_Refinery];
-				militaryValueLimit = lround(initialMilitaryValue * 1.5_fix);
+				militaryValueLimit = lround(initialMilitaryValue * 2.0_fix);
 				if (militaryValueLimit < 4000 && currentGame->getGameInitSettings().getMission() >= 21) {
 					militaryValueLimit = 4000;
 				}
 
-				logDebug("Medium Campaign  ");
+				logDebug("Medium Campaign militaryValueLimit: %d, harvesterLimit: %d", militaryValueLimit, harvesterLimit);
 			} break;
 
 			case Difficulty::Hard: {
 				if (currentGame->getGameInitSettings().getMission() >= 21) {
 					initialItemCount[Structure_Refinery] = 2;
-					militaryValueLimit = 10000;
+					militaryValueLimit = 8000;
 				}
 				else {
-					
-					militaryValueLimit = lround(initialMilitaryValue * 2_fix);
+					militaryValueLimit = lround(initialMilitaryValue * 3_fix);
 				}
-				harvesterLimit = 2 * initialItemCount[Structure_Refinery];
+				harvesterLimit = 3 * initialItemCount[Structure_Refinery];
 
-				logDebug("Hard Campaign  harvesterlimit = %d", harvesterLimit);
+				logDebug("Hard Campaign militaryValueLimit: %d, harvesterLimit: %d", militaryValueLimit, harvesterLimit);
 			} break;
 
 			case Difficulty::Brutal: {
 				//harvesterLimit = (currentGameMap->getSizeX() * currentGameMap->getSizeY() / 512);
-				if (initialItemCount[Structure_Refinery] < 2) {
-					initialItemCount[Structure_Refinery] = 2;
+				if (initialItemCount[Structure_Refinery] < 3) {
+					initialItemCount[Structure_Refinery] = 3;
 				}
-				militaryValueLimit = lround(initialMilitaryValue * 3_fix);
+				militaryValueLimit = lround(initialMilitaryValue * 4_fix);
+				
 				harvesterLimit = 3 * initialItemCount[Structure_Refinery];
-				logDebug("Brutal Campaign  ");
+				logDebug("Brutal Campaign militaryValueLimit: %d, harvesterLimit: %d", militaryValueLimit, harvesterLimit);
 			} break;
 
 			case Difficulty::Defend: {
 				harvesterLimit = 2 * initialItemCount[Structure_Refinery];
-				militaryValueLimit = lround(initialMilitaryValue * 1.8_fix);
+				militaryValueLimit = lround(initialMilitaryValue * 3_fix);
 
-				logDebug("Defensive Campaign  ");
+				logDebug("Defensive Campaign militaryValueLimit: %d, harvesterLimit: %d", militaryValueLimit, harvesterLimit);
 			} break;
 			}
 
@@ -364,28 +355,28 @@ void QuantBot::update() {
 
 			switch (difficulty) {
 			case Difficulty::Brutal: {
-				harvesterLimit = 50 * ratio;
-				militaryValueLimit = 65000 * ratio;
+				harvesterLimit = 60 * ratio;
+				militaryValueLimit = 75000 * ratio;
 				logDebug("BUILD BRUTAL SKIRM. harvesterLimit: 50 * ratio: %d = %d", ratio, harvesterLimit);
 			} break;
 
 			case Difficulty::Easy: {
 				harvesterLimit = 10 * ratio;
 
-				militaryValueLimit = 10000 * ratio;
+				militaryValueLimit = 15000 * ratio;
 				logDebug("BUILD EASY SKIRM. harvesterLimit: 10 * ratio: %d = %d", ratio, harvesterLimit);
 			} break;
 
 			case Difficulty::Medium: {
 				harvesterLimit = 20 * ratio;
-				militaryValueLimit = 20000 * ratio;
+				militaryValueLimit = 25000 * ratio;
 				logDebug("BUILD MEDIUM SKIRM. harvesterLimit: 20 * ratio: %d = %d", ratio, harvesterLimit);
 			} break;
 
 			case Difficulty::Hard: {
-				harvesterLimit = 30 * ratio;
-				militaryValueLimit = 40000 * ratio;
-				logDebug("BUILD HARD SKIRM. harvesterLimit: 35 * ratio: %d = %d", ratio, harvesterLimit);
+				harvesterLimit = 40 * ratio;
+				militaryValueLimit = 50000 * ratio;
+				logDebug("BUILD HARD SKIRM. harvesterLimit: 40 * ratio: %d = %d", ratio, harvesterLimit);
 			} break;
 
 			case Difficulty::Defend: {
@@ -413,19 +404,12 @@ void QuantBot::update() {
 		return;
 	}
 
-	// Calculate the total military value of the player
-	int militaryValue = 0;
-	for (Uint32 i = Unit_FirstID; i <= Unit_LastID; i++) {
-		if (i != Unit_Carryall
-			&& i != Unit_Harvester
-			&& i != Unit_MCV
-			&& i != Unit_Sandworm) {
-			militaryValue += getHouse()->getNumItems(i) * currentGame->objectData.data[i][getHouse()->getHouseID()].price;
-		}
-	}
-	//logDebug("Military Value %d  Initial Military Value %d", militaryValue, initialMilitaryValue);
 
+	int militaryValue = getHouse()->calculateMilitaryValue();
+	
 	checkAllUnits();
+
+	airAttack(); // special logic for ornithoper attack and defense coordination;
 
 	if (buildTimer <= 0) {
 		build(militaryValue);
@@ -572,7 +556,7 @@ void QuantBot::onDamage(const ObjectBase* pObject, int damage, Uint32 damagerID)
 		// only do these acitons for vehicles and not when fighting turrets
 		// repair them, if they are eligible to be repaired
 		if (difficulty != Difficulty::Easy) {
-			if ((pGroundUnit->getHealth() * 100) / pGroundUnit->getMaxHealth() < 75
+			if (pGroundUnit->getHealth() / pGroundUnit->getMaxHealth() < 0.80_fix
 				&& !pGroundUnit->isInfantry()
 				&& pGroundUnit->isVisible()
 				&& (pDamager->getItemID() != Structure_GunTurret
@@ -582,7 +566,7 @@ void QuantBot::onDamage(const ObjectBase* pObject, int damage, Uint32 damagerID)
 
 				// If unit isn't an infrantry then heal it once it is below 2/3 health if not an easy or medium campaign
 				if (getHouse()->hasRepairYard()
-					&& (pGroundUnit->getHealth() * 100) / pGroundUnit->getMaxHealth() < 60
+					&& pGroundUnit->getHealth() / pGroundUnit->getMaxHealth() < 0.6_fix
 
 					// don't do manual repairs if it's campaign and easy or medium difficulty
 					&& !(gameMode == GameMode::Campaign && (difficulty == Difficulty::Easy || difficulty == Difficulty::Medium))
@@ -591,7 +575,8 @@ void QuantBot::onDamage(const ObjectBase* pObject, int damage, Uint32 damagerID)
 				}
 
 				// Rotate unit backwards if it is taking damage if it is softer
-				else if (pGroundUnit->getItemID() != Unit_SiegeTank && pGroundUnit->getItemID() != Unit_Devastator) {
+				else if (pGroundUnit->getItemID() != pGroundUnit->getItemID() != Unit_Devastator 
+						&& pGroundUnit->getItemID() != pGroundUnit->getItemID() != Unit_SiegeTank) {
 					doSetAttackMode(pGroundUnit, AREAGUARD);
 					doMove2Pos(pGroundUnit, squadCenterLocation.x, squadCenterLocation.y, true);
 				}
@@ -634,441 +619,493 @@ Coord QuantBot::findMcvPlaceLocation(const MCV* pMCV) {
 }
 
 Coord QuantBot::findPlaceLocation(Uint32 itemID) {
-	// Will over allocate space for small maps so its not clean
-	// But should allow Richard to compile
-	int buildLocationScore[128][128] = { {0} };
+    // Will over allocate space for small maps so its not clean
+    // But should allow Richard to compile
+    int buildLocationScore[128][128] = { {0} };
 
-	int bestLocationX = -1;
-	int bestLocationY = -1;
-	int bestLocationScore = -10000;
-	int newSizeX = getStructureSize(itemID).x;
-	int newSizeY = getStructureSize(itemID).y;
-	Coord bestLocation = Coord::Invalid();
+    int bestLocationX = -1;
+    int bestLocationY = -1;
+    int bestLocationScore = -10000;
+    int newSizeX = getStructureSize(itemID).x;
+    int newSizeY = getStructureSize(itemID).y;
+    Coord bestLocation = Coord::Invalid();
 
 	for (const StructureBase* pStructureExisting : getStructureList()) {
 		if (pStructureExisting->getOwner() == getHouse()) {
 
-			int existingStartX = pStructureExisting->getX();
-			int existingStartY = pStructureExisting->getY();
+            int existingStartX = pStructureExisting->getX();
+            int existingStartY = pStructureExisting->getY();
 
-			int existingSizeX = pStructureExisting->getStructureSizeX();
-			int existingSizeY = pStructureExisting->getStructureSizeY();
+            int existingSizeX = pStructureExisting->getStructureSizeX();
+            int existingSizeY = pStructureExisting->getStructureSizeY();
 
-			int existingEndX = existingStartX + existingSizeX;
-			int existingEndY = existingStartY + existingSizeY;
+            int existingEndX = existingStartX + existingSizeX;
+            int existingEndY = existingStartY + existingSizeY;
 
-			squadRallyLocation = findSquadRallyLocation();
+            squadRallyLocation = findSquadRallyLocation();
 
-			bool existingIsBuilder = (pStructureExisting->getItemID() == Structure_HeavyFactory
-				|| pStructureExisting->getItemID() == Structure_RepairYard
-				|| pStructureExisting->getItemID() == Structure_LightFactory
-				|| pStructureExisting->getItemID() == Structure_WOR
-				|| pStructureExisting->getItemID() == Structure_Barracks
-				|| pStructureExisting->getItemID() == Structure_StarPort);
+            bool existingIsBuilder = (pStructureExisting->getItemID() == Structure_HeavyFactory
+                || pStructureExisting->getItemID() == Structure_RepairYard
+                || pStructureExisting->getItemID() == Structure_LightFactory
+                || pStructureExisting->getItemID() == Structure_WOR
+                || pStructureExisting->getItemID() == Structure_Barracks
+                || pStructureExisting->getItemID() == Structure_StarPort);
 
-			bool sizeMatchX = (existingSizeX == newSizeX);
-			bool sizeMatchY = (existingSizeY == newSizeY);
+            bool sizeMatchX = (existingSizeX == newSizeX);
+            bool sizeMatchY = (existingSizeY == newSizeY);
 
 
 			for (int placeLocationX = existingStartX - newSizeX; placeLocationX <= existingEndX; placeLocationX++) {
 				for (int placeLocationY = existingStartY - newSizeY; placeLocationY <= existingEndY; placeLocationY++) {
 					if (getMap().tileExists(placeLocationX, placeLocationY)) {
 						if (getMap().okayToPlaceStructure(placeLocationX, placeLocationY, newSizeX, newSizeY,
-							false, (itemID == Structure_ConstructionYard) ? nullptr : getHouse())) {
+                            false, (itemID == Structure_ConstructionYard) ? nullptr : getHouse())) {
 
-							int placeLocationEndX = placeLocationX + newSizeX;
-							int placeLocationEndY = placeLocationY + newSizeY;
+                            int placeLocationEndX = placeLocationX + newSizeX;
+                            int placeLocationEndY = placeLocationY + newSizeY;
 
-							bool alignedX = (placeLocationX == existingStartX && sizeMatchX);
-							bool alignedY = (placeLocationY == existingStartY && sizeMatchY);
+                            bool alignedX = (placeLocationX == existingStartX && sizeMatchX);
+                            bool alignedY = (placeLocationY == existingStartY && sizeMatchY);
 
 							// bool placeGapExists = (placeLocationEndX < existingStartX || placeLocationX > existingEndX || placeLocationEndY < existingStartY || placeLocationY > existingEndY);
 
-							// How many free spaces the building will have if placed
+                            // How many free spaces the building will have if placed
 							for (int i = placeLocationX - 1; i <= placeLocationEndX; i++) {
 								for (int j = placeLocationY - 1; j <= placeLocationEndY; j++) {
 									if (getMap().tileExists(i, j) && (getMap().getSizeX() > i) && (0 <= i) && (getMap().getSizeY() > j) && (0 <= j)) {
-										// Penalise if near edge of map
+                                        // Favor edge of map placement
 										if ((i == 0) || (i == getMap().getSizeX() - 1) || (j == 0) || (j == getMap().getSizeY() - 1)) {
-											buildLocationScore[placeLocationX][placeLocationY] -= 10;
-										}
+                                            buildLocationScore[placeLocationX][placeLocationY] += 10;
+                                        }
 
 										if (getMap().getTile(i, j)->hasAStructure()) {
-											// If one of our buildings is nearby favour the location
-											// if it is someone elses building don't favour it
+                                            // If one of our buildings is nearby favour the location
+                                            // if it is someone elses building don't favour it
 											if (getMap().getTile(i, j)->getOwner() == getHouse()->getHouseID()) {
-												buildLocationScore[placeLocationX][placeLocationY] += 3;
+                                                buildLocationScore[placeLocationX][placeLocationY] += 3;
 											}
 											else {
-												buildLocationScore[placeLocationX][placeLocationY] -= 10;
-											}
+                                                buildLocationScore[placeLocationX][placeLocationY] -= 10;
+                                            }
 										}
 										else if (!getMap().getTile(i, j)->isRock()) {
-											// square isn't rock, favour it
-											buildLocationScore[placeLocationX][placeLocationY] += 1;
+                                            // square isn't rock, favour it
+                                            buildLocationScore[placeLocationX][placeLocationY] += 5;
 										}
 										else if (getMap().getTile(i, j)->hasAGroundObject()) {
 											if (getMap().getTile(i, j)->getOwner() != getHouse()->getHouseID()) {
-												// try not to build next to units which aren't yours
-												buildLocationScore[placeLocationX][placeLocationY] -= 100;
+                                                // try not to build next to units which aren't yours
+                                                buildLocationScore[placeLocationX][placeLocationY] -= 100;
 											}
 											else if (itemID != Structure_RocketTurret) {
-												buildLocationScore[placeLocationX][placeLocationY] -= 20;
-											}
-										}
+                                                buildLocationScore[placeLocationX][placeLocationY] -= 20;
+                                            }
+                                        }
 									}
 									else {
-										// penalise if on edge of map
-										buildLocationScore[placeLocationX][placeLocationY] -= 200;
-									}
-								}
-							}
+                                        // penalise if outside of map
+                                        buildLocationScore[placeLocationX][placeLocationY] -= 200;
+                                    }
+                                }
+                            }
 
-							//encourage structure alignment
+                            //encourage structure alignment
 							if (alignedX) {
 								buildLocationScore[placeLocationX][placeLocationX] += 10;
-							}
+                            }
 
 							if (alignedY) {
-								buildLocationScore[placeLocationX][placeLocationY] += 10;
-							}
+                                buildLocationScore[placeLocationX][placeLocationY] += 10;
+                            }
 
-							// Add building specific scores
+                            // Add building specific scores
 							if (existingIsBuilder || itemID == Structure_GunTurret || itemID == Structure_RocketTurret) {
-								buildLocationScore[placeLocationX][placeLocationY] -= lround(blockDistance(squadRallyLocation, Coord(placeLocationX, placeLocationY)) / 2);
+                                buildLocationScore[placeLocationX][placeLocationY] -= lround(blockDistance(squadRallyLocation, Coord(placeLocationX, placeLocationY)) / 2);
 
-								buildLocationScore[placeLocationX][placeLocationY] -= lround(blockDistance(findBaseCentre(getHouse()->getHouseID()), Coord(placeLocationX, placeLocationY)));
-							}
+                                buildLocationScore[placeLocationX][placeLocationY] -= lround(blockDistance(findBaseCentre(getHouse()->getHouseID()), Coord(placeLocationX, placeLocationY)));
+                            }
 
-							// Pick this location if it has the best score
+                            // Pick this location if it has the best score
 							if (buildLocationScore[placeLocationX][placeLocationY] > bestLocationScore) {
-								bestLocationScore = buildLocationScore[placeLocationX][placeLocationY];
-								bestLocationX = placeLocationX;
-								bestLocationY = placeLocationY;
+                                bestLocationScore = buildLocationScore[placeLocationX][placeLocationY];
+                                bestLocationX = placeLocationX;
+                                bestLocationY = placeLocationY;
 								//logDebug("Build location for item:%d  x:%d y:%d score:%d", itemID, bestLocationX, bestLocationY, bestLocationScore);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
 
 	if (bestLocationScore != -10000) {
-		bestLocation = Coord(bestLocationX, bestLocationY);
-	}
+        bestLocation = Coord(bestLocationX, bestLocationY);
+    }
 
-	return bestLocation;
+    return bestLocation;
 }
 
 
 void QuantBot::build(int militaryValue) {
-	int houseID = getHouse()->getHouseID();
+    int houseID = getHouse()->getHouseID();
 	auto& data = currentGame->objectData.data;
 
-	int itemCount[Num_ItemID];
-	for (int i = ItemID_FirstID; i <= ItemID_LastID; i++) {
-		itemCount[i] = getHouse()->getNumItems(i);
-	}
+    int itemCount[Num_ItemID];
+    for (int i = ItemID_FirstID; i <= ItemID_LastID; i++) {
+        itemCount[i] = getHouse()->getNumItems(i);
+    }
 
-	int activeHeavyFactoryCount = 0;
-	int activeRepairYardCount = 0;
+    int activeHeavyFactoryCount = 0;
+    int activeHighTechFactoryCount = 0;
+    int activeRepairYardCount = 0;
 
-	// Let's try just running this once...
-	if (squadRallyLocation.isInvalid()) {
-		squadRallyLocation = findSquadRallyLocation();
-		squadRetreatLocation = findSquadRetreatLocation();
-		if (gameMode != GameMode::Campaign) {
-			retreatAllUnits();
-		}
-	}
+    // Let's try just running this once...
+    if (squadRallyLocation.isInvalid()) {
+        squadRallyLocation = findSquadRallyLocation();
+        squadRetreatLocation = findSquadRetreatLocation();
+        if (gameMode != GameMode::Campaign) {
+            retreatAllUnits();
+        }
+    }
 
-	// Next add in the objects we are building
-	for (const StructureBase* pStructure : getStructureList()) {
-		if (pStructure->getOwner() == getHouse()) {
-			if (pStructure->isABuilder()) {
-				const BuilderBase* pBuilder = static_cast<const BuilderBase*>(pStructure);
-				if (pBuilder->getProductionQueueSize() > 0) {
-					itemCount[pBuilder->getCurrentProducedItem()]++;
-					if (pBuilder->getItemID() == Structure_HeavyFactory) {
-						activeHeavyFactoryCount++;
+    // Next add in the objects we are building
+    for (const StructureBase* pStructure : getStructureList()) {
+        if (pStructure->getOwner() == getHouse()) {
+            if (pStructure->isABuilder()) {
+                const BuilderBase* pBuilder = static_cast<const BuilderBase*>(pStructure);
+                if (pBuilder->getProductionQueueSize() > 0) {
+                    itemCount[pBuilder->getCurrentProducedItem()]++;
+                    if (pBuilder->getItemID() == Structure_HeavyFactory) {
+                        activeHeavyFactoryCount++;
 					}
-				}
-			}
-			else if (pStructure->getItemID() == Structure_RepairYard) {
-				const RepairYard* pRepairYard = static_cast<const RepairYard*>(pStructure);
-				if (!pRepairYard->isFree()) {
-					activeRepairYardCount++;
-				}
+                    if (pBuilder->getItemID() == Structure_HighTechFactory) {
+                        activeHighTechFactoryCount++;
+                    }
+                }
+            }
+            else if (pStructure->getItemID() == Structure_RepairYard) {
+                const RepairYard* pRepairYard = static_cast<const RepairYard*>(pStructure);
+                if (!pRepairYard->isFree()) {
+                    activeRepairYardCount++;
+                }
 
-			}
+            }
 
-			// Set unit deployment position
-			if (pStructure->getItemID() == Structure_Barracks
-				|| pStructure->getItemID() == Structure_WOR
-				|| pStructure->getItemID() == Structure_LightFactory
-				|| pStructure->getItemID() == Structure_HeavyFactory
-				|| pStructure->getItemID() == Structure_RepairYard
-				|| pStructure->getItemID() == Structure_StarPort) {
-				doSetDeployPosition(pStructure, squadRallyLocation.x, squadRallyLocation.y);
-			}
-		}
-
-
-	}
-
-	int money = getHouse()->getCredits();
-
-	if (militaryValue > 0 || getHouse()->getNumStructures() > 0) {
-		logDebug("Stats: %d  crdt: %d  mVal: %d/%d  built: %d  kill: %d  loss: %d hvstr: %d/%d",
-			attackTimer, getHouse()->getCredits(), militaryValue, militaryValueLimit, getHouse()->getUnitBuiltValue(),
-			getHouse()->getKillValue(), getHouse()->getLossValue(), getHouse()->getNumItems(Unit_Harvester), harvesterLimit);
-	}
+            // Set unit deployment position
+            if (pStructure->getItemID() == Structure_Barracks
+                || pStructure->getItemID() == Structure_WOR
+                || pStructure->getItemID() == Structure_LightFactory
+                || pStructure->getItemID() == Structure_HeavyFactory
+                || pStructure->getItemID() == Structure_RepairYard
+                || pStructure->getItemID() == Structure_StarPort) {
+                doSetDeployPosition(pStructure, squadRallyLocation.x, squadRallyLocation.y);
+            }
+        }
 
 
-	// Second attempt at unit prioritisation
-	// This algorithm calculates damage dealt over units lost value for each unit type
-	// referred to as damage loss ratio (dlr)
-	// It then prioritises the build of units with a higher dlr
+    }
+
+    int money = getHouse()->getCredits();
+
+    if (militaryValue > 0 || getHouse()->getNumStructures() > 0) {
+        logDebug("Stats: %d  crdt: %d  mVal: %d/%d  built: %d  kill: %d  loss: %d hvstr: %d/%d",
+            attackTimer, getHouse()->getCredits(), militaryValue, militaryValueLimit, getHouse()->getUnitBuiltValue(),
+            getHouse()->getKillValue(), getHouse()->getLossValue(), getHouse()->getNumItems(Unit_Harvester), harvesterLimit);
+    }
 
 
+    // Second attempt at unit prioritisation
+    // This algorithm calculates damage dealt over units lost value for each unit type
+    // referred to as damage loss ratio (dlr)
+    // It then prioritises the build of units with a higher dlr
 
-	FixPoint dlrTank = getHouse()->getNumItemDamageInflicted(Unit_Tank) / FixPoint((1 + getHouse()->getNumLostItems(Unit_Tank)) * data[Unit_Tank][houseID].price);
-	FixPoint dlrSiege = getHouse()->getNumItemDamageInflicted(Unit_SiegeTank) / FixPoint((1 + getHouse()->getNumLostItems(Unit_SiegeTank)) * data[Unit_SiegeTank][houseID].price);
-	int numSpecialUnitsDamageInflicted = getHouse()->getNumItemDamageInflicted(Unit_Devastator) + getHouse()->getNumItemDamageInflicted(Unit_SonicTank) + getHouse()->getNumItemDamageInflicted(Unit_Deviator);
+	FixPoint dlrTank = calculateDLR(getHouse()->getNumItemDamageInflicted(Unit_Tank), 
+								   getHouse()->getNumLostItems(Unit_Tank), 
+								   data[Unit_Tank][houseID].price);
+
+	FixPoint dlrSiege = calculateDLR(getHouse()->getNumItemDamageInflicted(Unit_SiegeTank),
+								    getHouse()->getNumLostItems(Unit_SiegeTank),
+								    data[Unit_SiegeTank][houseID].price);
+
+	int numSpecialUnitsDamageInflicted = getHouse()->getNumItemDamageInflicted(Unit_Devastator) 
+										+ getHouse()->getNumItemDamageInflicted(Unit_SonicTank) 
+										+ getHouse()->getNumItemDamageInflicted(Unit_Deviator);
+
 	int weightedNumLostSpecialUnits = (getHouse()->getNumLostItems(Unit_Devastator) * data[Unit_Devastator][houseID].price)
 		+ (getHouse()->getNumLostItems(Unit_SonicTank) * data[Unit_SonicTank][houseID].price)
 		+ (getHouse()->getNumLostItems(Unit_Deviator) * data[Unit_Deviator][houseID].price)
-		+ 700; // middle ground 1 for special units
-	FixPoint dlrSpecial = FixPoint(numSpecialUnitsDamageInflicted) / FixPoint(weightedNumLostSpecialUnits);
-	FixPoint dlrLauncher = getHouse()->getNumItemDamageInflicted(Unit_Launcher) / FixPoint((1 + getHouse()->getNumLostItems(Unit_Launcher)) * data[Unit_Launcher][houseID].price);
-	FixPoint dlrOrnithopter = getHouse()->getNumItemDamageInflicted(Unit_Ornithopter) / FixPoint((1 + getHouse()->getNumLostItems(Unit_Ornithopter)) * data[Unit_Ornithopter][houseID].price);
+        + 700; // middle ground 1 for special units
 
-	Sint32 totalDamage = getHouse()->getNumItemDamageInflicted(Unit_Tank)
-		+ getHouse()->getNumItemDamageInflicted(Unit_SiegeTank)
-		+ getHouse()->getNumItemDamageInflicted(Unit_Devastator)
-		+ getHouse()->getNumItemDamageInflicted(Unit_Launcher)
-		+ getHouse()->getNumItemDamageInflicted(Unit_Ornithopter);
+	FixPoint dlrSpecial = (numSpecialUnitsDamageInflicted <= 0) ? 0_fix 
+						 : FixPoint(numSpecialUnitsDamageInflicted) / FixPoint(weightedNumLostSpecialUnits);
 
-	// Harkonnen can't build ornithopers
-	if (houseID == HOUSE_HARKONNEN) {
-		dlrOrnithopter = 0;
+	FixPoint dlrLauncher = calculateDLR(getHouse()->getNumItemDamageInflicted(Unit_Launcher),
+									   getHouse()->getNumLostItems(Unit_Launcher),
+									   data[Unit_Launcher][houseID].price);
+
+	FixPoint dlrOrnithopter = calculateDLR(getHouse()->getNumItemDamageInflicted(Unit_Ornithopter),
+										   getHouse()->getNumLostItems(Unit_Ornithopter),
+										   data[Unit_Ornithopter][houseID].price);
+
+    Sint32 totalDamage = getHouse()->getNumItemDamageInflicted(Unit_Tank)
+        + getHouse()->getNumItemDamageInflicted(Unit_SiegeTank)
+        + getHouse()->getNumItemDamageInflicted(Unit_Devastator)
+        + getHouse()->getNumItemDamageInflicted(Unit_Launcher)
+        + getHouse()->getNumItemDamageInflicted(Unit_Ornithopter);
+
+    // Harkonnen can't build ornithopers
+    if (houseID == HOUSE_HARKONNEN) {
+		dlrOrnithopter = 0_fix;
+    }
+
+    // Ordos can't build Launchers
+    if (houseID == HOUSE_ORDOS) {
+		dlrLauncher = 0_fix;
+    }
+
+    // Sonic tanks can get into negative damage territory
+	if (dlrSpecial < 0_fix) {
+		dlrSpecial = 0_fix;
+    }
+
+    FixPoint dlrTotal = dlrTank + dlrSiege + dlrSpecial + dlrLauncher + dlrOrnithopter;
+
+	// Add a minimum threshold to prevent division by very small numbers
+	if (dlrTotal <= 0.1_fix) {
+		dlrTotal = 0.1_fix;
+    }
+
+    logDebug("Dmg: %d DLR: %f", totalDamage, dlrTotal.toFloat());
+
+    /// Calculate ratios of launcher, special and light tanks. Remainder will be tank
+    FixPoint launcherPercent = dlrLauncher / dlrTotal;
+    FixPoint specialPercent = dlrSpecial / dlrTotal;
+    FixPoint siegePercent = dlrSiege / dlrTotal;
+    FixPoint ornithopterPercent = dlrOrnithopter / dlrTotal;
+    FixPoint tankPercent = dlrTank / dlrTotal;
+
+	// Normalize ratios to ensure they sum to 1.0
+	FixPoint sum = launcherPercent + specialPercent + siegePercent + ornithopterPercent + tankPercent;
+	if (sum > 0_fix) {
+		launcherPercent = launcherPercent / sum;
+		specialPercent = specialPercent / sum;
+		siegePercent = siegePercent / sum;
+		ornithopterPercent = ornithopterPercent / sum;
+		tankPercent = tankPercent / sum;
 	}
 
-	// Ordos can't build Launchers
-	if (houseID == HOUSE_ORDOS) {
-		dlrLauncher = 0;
-	}
-
-	// Sonic tanks can get into negative damage territory
-	if (dlrSpecial < 0) {
-		dlrSpecial = 0;
-	}
-
-	FixPoint dlrTotal = dlrTank + dlrSiege + dlrSpecial + dlrLauncher + dlrOrnithopter;
-
-	if (dlrTotal < 0) {
-		dlrTotal = 0;
-	}
-
-	logDebug("Dmg: %d DLR: %f", totalDamage, dlrTotal.toFloat());
-
-	/// Calculate ratios of launcher, special and light tanks. Remainder will be tank
-	FixPoint launcherPercent = dlrLauncher / dlrTotal;
-	FixPoint specialPercent = dlrSpecial / dlrTotal;
-	FixPoint siegePercent = dlrSiege / dlrTotal;
-	FixPoint ornithopterPercent = dlrOrnithopter / dlrTotal;
-	FixPoint tankPercent = dlrTank / dlrTotal;
 
 
+    // If we haven't done much damage just keep all ratios at optimised defaults
+    // These ratios are based on end game stats over a number of AI test runs to see
+    // Which units perform. By and large launchers and siege tanks have the best damage to loss ratio
+    // commenting this out for now
 
-	// If we haven't done much damage just keep all ratios at optimised defaults
-	// These ratios are based on end game stats over a number of AI test runs to see
-	// Which units perform. By and large launchers and siege tanks have the best damage to loss ratio
-	// commenting this out for now
+    // Commenting ignoring the logic for now and going with gut feel
+    if (totalDamage < 3000) {
+        switch (houseID) {
+        case HOUSE_HARKONNEN:
+			launcherPercent = 0.65_fix;
+			specialPercent = 0.25_fix;
+            siegePercent = 0.10_fix;
+            siegePercent = 0.05_fix;
+            ornithopterPercent = 0.0_fix;
+            break;
 
-	// Commenting ignoring the logic for now and going with gut feel
-	if (totalDamage < 3000) {
-		switch (houseID) {
-		case HOUSE_HARKONNEN:
-			launcherPercent = 0.40_fix;
-			specialPercent = 0.40_fix;
+        case HOUSE_ORDOS:
+            launcherPercent = 0.0_fix; // Don't have these
+			specialPercent = 0.20_fix;
+			siegePercent = 0.05_fix;
+			tankPercent = 0.65_fix;
+			ornithopterPercent = 0.10_fix;
+            break;
+
+        case HOUSE_ATREIDES:
+			launcherPercent = 0.65_fix;
+			specialPercent = 0.10_fix;
 			siegePercent = 0.10_fix;
-			siegePercent = 0.10_fix;
-			ornithopterPercent = 0.0_fix;
-			break;
-
-		case HOUSE_ORDOS:
-			launcherPercent = 0.0_fix; // Don't have these
-			specialPercent = 0.40_fix;
-			siegePercent = 0.10_fix;
-			tankPercent = 0.45_fix;
+			tankPercent = 0.10_fix;
 			ornithopterPercent = 0.05_fix;
 			break;
+		
+		case HOUSE_FREMEN:
+			launcherPercent = 0.30_fix;
+			specialPercent = 0.70_fix;
+			siegePercent = 0.00_fix;
+			tankPercent = 0.00_fix;
+			ornithopterPercent = 0.00_fix;
+			break;
+		
+		case HOUSE_SARDAUKAR:
+			launcherPercent = 0.45_fix;
+			specialPercent = 0.00_fix;
+			siegePercent = 0.45_fix;
+			tankPercent = 0.05_fix;
+			ornithopterPercent = 0.05_fix;
+            break;
 
-		case HOUSE_ATREIDES:
-			launcherPercent = 0.35_fix;
+        default:
+            launcherPercent = 0.30_fix;
+			specialPercent = 0.05_fix;
 			siegePercent = 0.30_fix;
 			tankPercent = 0.30_fix;
-			ornithopterPercent = 0.05_fix;
-			break;
+			ornithopterPercent = 0.10_fix;
 
-		default:
-			launcherPercent = 0.30_fix;
-			specialPercent = 0.0_fix;
-			siegePercent = 0.60_fix;
-			tankPercent = 0.10_fix;
-			ornithopterPercent = 0.0_fix;
+            break;
+        }
+    }
 
-			break;
-		}
-	}
+    // lets analyse damage inflicted
 
-	// lets analyse damage inflicted
-
-	logDebug("  Tank: %d/%d %f Siege: %d/%d %f Special: %d/%d %f Launch: %d/%d %f Orni: %d/%d %f",
-		getHouse()->getNumItemDamageInflicted(Unit_Tank), getHouse()->getNumLostItems(Unit_Tank) * 300, tankPercent.toDouble(),
-		getHouse()->getNumItemDamageInflicted(Unit_SiegeTank), getHouse()->getNumLostItems(Unit_SiegeTank) * 600, siegePercent.toDouble(),
-		getHouse()->getNumItemDamageInflicted(Unit_SonicTank) + getHouse()->getNumItemDamageInflicted(Unit_Devastator) + getHouse()->getNumItemDamageInflicted(Unit_Deviator),
-		getHouse()->getNumLostItems(Unit_SonicTank) * 600 + getHouse()->getNumLostItems(Unit_Devastator) * 800 + getHouse()->getNumLostItems(Unit_Deviator) * 750,
-		specialPercent.toDouble(),
-		getHouse()->getNumItemDamageInflicted(Unit_Launcher), getHouse()->getNumLostItems(Unit_Launcher) * 450, launcherPercent.toDouble(),
+    logDebug("  Tank: %d/%d %f Siege: %d/%d %f Special: %d/%d %f Launch: %d/%d %f Orni: %d/%d %f",
+        getHouse()->getNumItemDamageInflicted(Unit_Tank), getHouse()->getNumLostItems(Unit_Tank) * 300, tankPercent.toDouble(),
+        getHouse()->getNumItemDamageInflicted(Unit_SiegeTank), getHouse()->getNumLostItems(Unit_SiegeTank) * 600, siegePercent.toDouble(),
+        getHouse()->getNumItemDamageInflicted(Unit_SonicTank) + getHouse()->getNumItemDamageInflicted(Unit_Devastator) + getHouse()->getNumItemDamageInflicted(Unit_Deviator),
+        getHouse()->getNumLostItems(Unit_SonicTank) * 600 + getHouse()->getNumLostItems(Unit_Devastator) * 800 + getHouse()->getNumLostItems(Unit_Deviator) * 750,
+        specialPercent.toDouble(),
+        getHouse()->getNumItemDamageInflicted(Unit_Launcher), getHouse()->getNumLostItems(Unit_Launcher) * 450, launcherPercent.toDouble(),
 		getHouse()->getNumItemDamageInflicted(Unit_Ornithopter), getHouse()->getNumLostItems(Unit_Ornithopter) * data[Unit_Ornithopter][houseID].price, ornithopterPercent.toDouble()
-	);
-	
-	// End of adaptive unit prioritisation algorithm
+    );
+    
+    // End of adaptive unit prioritisation algorithm
 
 
-	for (const StructureBase* pStructure : getStructureList()) {
-		if (pStructure->getOwner() == getHouse()) {
-			if ((pStructure->isRepairing() == false)
+    for (const StructureBase* pStructure : getStructureList()) {
+        if (pStructure->getOwner() == getHouse()) {
+            if ((pStructure->isRepairing() == false)
+                && (pStructure->getHealth() < pStructure->getMaxHealth())
+                && (!getGameInitSettings().getGameOptions().concreteRequired
+					|| pStructure->getItemID() == Structure_Palace
+                    || pStructure->getItemID() == Structure_ConstructionYard) // Palace repairs for free
+                && (pStructure->getItemID() != Structure_Refinery
+                    && pStructure->getItemID() != Structure_Silo
+                    && pStructure->getItemID() != Structure_Radar
+                    && pStructure->getItemID() != Structure_WindTrap))
+            {
+                doRepair(pStructure);
+            }
+            else if ((pStructure->isRepairing() == false)
 				&& (pStructure->getHealth() < pStructure->getMaxHealth())
-				&& (!getGameInitSettings().getGameOptions().concreteRequired
-					|| pStructure->getItemID() == Structure_Palace) // Palace repairs for free
-				&& (pStructure->getItemID() != Structure_Refinery
-					&& pStructure->getItemID() != Structure_Silo
-					&& pStructure->getItemID() != Structure_Radar
-					&& pStructure->getItemID() != Structure_WindTrap))
-			{
-				doRepair(pStructure);
-			}
-			else if ((pStructure->isRepairing() == false)
-				&& (pStructure->getHealth() < pStructure->getMaxHealth() * 0.40_fix)
-				&& money > 1000) {
-				doRepair(pStructure);
-			}
-			else if ((pStructure->isRepairing() == false) && money > 5000) {
-				// Repair if we are rich
-				doRepair(pStructure);
-			}
-			else if (pStructure->getItemID() == Structure_RocketTurret) {
-				if (!getGameInitSettings().getGameOptions().structuresDegradeOnConcrete || pStructure->hasATarget()) {
-					doRepair(pStructure);
-				}
-			}
+                && money > 1000) {
+                doRepair(pStructure);
+            }
+            else if ((pStructure->isRepairing() == false) && money > 5000) {
+                // Repair if we are rich
+                doRepair(pStructure);
+            }
+            else if (pStructure->getItemID() == Structure_RocketTurret) {
+                if (!getGameInitSettings().getGameOptions().structuresDegradeOnConcrete || pStructure->hasATarget()) {
+                    doRepair(pStructure);
+                }
+            }
 
-			// Special weapon launch logic
-			if (pStructure->getItemID() == Structure_Palace) {
+            // Special weapon launch logic
+            if (pStructure->getItemID() == Structure_Palace) {
 
-				const Palace* pPalace = static_cast<const Palace*>(pStructure);
-				if (pPalace->isSpecialWeaponReady()) {
+                const Palace* pPalace = static_cast<const Palace*>(pStructure);
+                if (pPalace->isSpecialWeaponReady()) {
 
-					if (houseID != HOUSE_HARKONNEN && houseID != HOUSE_SARDAUKAR) {
-						doSpecialWeapon(pPalace);
-					}
-					else {
-						int enemyHouseID = -1;
-						int enemyHouseBuildingCount = 0;
-
-						for (int i = 0; i < NUM_HOUSES; i++) {
-							if (getHouse(i) != nullptr) {
-								if (getHouse(i)->getTeamID() != getHouse()->getTeamID() && getHouse(i)->getNumStructures() > enemyHouseBuildingCount) {
-									enemyHouseBuildingCount = getHouse(i)->getNumStructures();
-									enemyHouseID = i;
-								}
-							}
-						}
-
-						if ((enemyHouseID != -1) && (houseID == HOUSE_HARKONNEN || houseID == HOUSE_SARDAUKAR)) {
-							Coord target = findBaseCentre(enemyHouseID);
-							doLaunchDeathhand(pPalace, target.x, target.y);
+                    if (houseID == HOUSE_ORDOS && houseID == HOUSE_MERCENARY) {
+                        doSpecialWeapon(pPalace); // Sabateur
+                    } else if (houseID == HOUSE_ATREIDES || houseID == HOUSE_FREMEN) {
+						if (getHouse()->calculateMilitaryValue() < militaryValueLimit) {
+							doSpecialWeapon(pPalace); // Fremen - only if not at max military value
 						}
 					}
-				}
-			}
+                    else { // Harkonnen and Sardaukar
+                        int enemyHouseID = -1;
+                        int enemyHouseBuildingCount = 0;
 
-			if (pStructure->isABuilder()) {
-				const BuilderBase* pBuilder = static_cast<const BuilderBase*>(pStructure);
-				switch (pStructure->getItemID()) {
+                        for (int i = 0; i < NUM_HOUSES; i++) {
+                            if (getHouse(i) != nullptr) {
+                                if (getHouse(i)->getTeamID() != getHouse()->getTeamID() && getHouse(i)->getNumStructures() > enemyHouseBuildingCount) {
+                                    enemyHouseBuildingCount = getHouse(i)->getNumStructures();
+                                    enemyHouseID = i;
+                                }
+                            }
+                        }
 
-				case Structure_LightFactory: {
-					if (!pBuilder->isUpgrading()
-						&& gameMode == GameMode::Campaign
-						&& money > 1000
-						&& ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
-						&& pBuilder->getProductionQueueSize() < 1
-						&& pBuilder->getBuildListSize() > 0
-						&& militaryValue < militaryValueLimit) {
+                        if ((enemyHouseID != -1) && (houseID == HOUSE_HARKONNEN || houseID == HOUSE_SARDAUKAR)) {
+                            Coord target = findBaseCentre(enemyHouseID);
+                            doLaunchDeathhand(pPalace, target.x, target.y);
+                        }
+                    }
+                }
+            }
 
-						if (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel() && getHouse()->getCredits() > 1500) {
-							doUpgrade(pBuilder);
-						}
-						else if (!getHouse()->isGroundUnitLimitReached()) {
-							Uint32 itemID = NONE_ID;
+            if (pStructure->isABuilder()) {
+                const BuilderBase* pBuilder = static_cast<const BuilderBase*>(pStructure);
+                switch (pStructure->getItemID()) {
 
-							if (pBuilder->isAvailableToBuild(Unit_RaiderTrike)) {
-								itemID = Unit_RaiderTrike;
-							}
-							else if (pBuilder->isAvailableToBuild(Unit_Quad)) {
-								itemID = Unit_Quad;
-							}
-							else if (pBuilder->isAvailableToBuild(Unit_Trike)) {
-								itemID = Unit_Trike;
-							}
+                case Structure_LightFactory: {
+                    if (!pBuilder->isUpgrading()
+                        && gameMode == GameMode::Campaign
+                        && money > 1000
+                        && ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
+                        && pBuilder->getProductionQueueSize() < 1
+                        && pBuilder->getBuildListSize() > 0
+                        && militaryValue < militaryValueLimit) {
 
-							if (itemID != NONE_ID) {
-								doProduceItem(pBuilder, itemID);
-								itemCount[itemID]++;
-							}
-						}
-					}
-				} break;
+                        if (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel() && getHouse()->getCredits() > 1500) {
+                            doUpgrade(pBuilder);
+                        }
+                        else if (!getHouse()->isGroundUnitLimitReached()) {
+                            Uint32 itemID = NONE_ID;
 
-				case Structure_WOR: {
-					if (!pBuilder->isUpgrading()
-						&& pBuilder->isAvailableToBuild(Unit_Trooper)
-						&& gameMode == GameMode::Campaign
-						&& money > 1000
-						&& ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
-						&& pBuilder->getProductionQueueSize() < 1
-						&& pBuilder->getBuildListSize() > 0
-						&& !getHouse()->isInfantryUnitLimitReached()
-						&& militaryValue < militaryValueLimit) {
+                            if (pBuilder->isAvailableToBuild(Unit_RaiderTrike)) {
+                                itemID = Unit_RaiderTrike;
+                            }
+                            else if (pBuilder->isAvailableToBuild(Unit_Quad)) {
+                                itemID = Unit_Quad;
+                            }
+                            else if (pBuilder->isAvailableToBuild(Unit_Trike)) {
+                                itemID = Unit_Trike;
+                            }
 
-						doProduceItem(pBuilder, Unit_Trooper);
-						itemCount[Unit_Trooper]++;
-					}
-				} break;
+                            if (itemID != NONE_ID) {
+                                doProduceItem(pBuilder, itemID);
+                                itemCount[itemID]++;
+                            }
+                        }
+                    }
+                } break;
 
-				case Structure_Barracks: {
-					if (!pBuilder->isUpgrading()
-						&& pBuilder->isAvailableToBuild(Unit_Soldier)
-						&& gameMode == GameMode::Campaign
-						&& ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
-						&& itemCount[Structure_WOR] == 0
-						&& money > 1000
-						&& pBuilder->getProductionQueueSize() < 1
-						&& pBuilder->getBuildListSize() > 0
-						&& !getHouse()->isInfantryUnitLimitReached()
-						&& militaryValue < militaryValueLimit) {
+                case Structure_WOR: {
+                    if (!pBuilder->isUpgrading()
+                        && pBuilder->isAvailableToBuild(Unit_Trooper)
+                        && gameMode == GameMode::Campaign
+                        && money > 1000
+                        && ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
+                        && pBuilder->getProductionQueueSize() < 1
+                        && pBuilder->getBuildListSize() > 0
+                        && !getHouse()->isInfantryUnitLimitReached()
+                        && militaryValue < militaryValueLimit) {
 
-						doProduceItem(pBuilder, Unit_Soldier);
-						itemCount[Unit_Soldier]++;
-					}
-				} break;
+                        doProduceItem(pBuilder, Unit_Trooper);
+                        itemCount[Unit_Trooper]++;
+                    }
+                } break;
 
-				case Structure_HighTechFactory: {
+                case Structure_Barracks: {
+                    if (!pBuilder->isUpgrading()
+                        && pBuilder->isAvailableToBuild(Unit_Soldier)
+                        && gameMode == GameMode::Campaign
+                        && ((itemCount[Structure_HeavyFactory] == 0) || militaryValue < militaryValueLimit * 0.30_fix)
+                        && itemCount[Structure_WOR] == 0
+                        && money > 1000
+                        && pBuilder->getProductionQueueSize() < 1
+                        && pBuilder->getBuildListSize() > 0
+                        && !getHouse()->isInfantryUnitLimitReached()
+                        && militaryValue < militaryValueLimit) {
+
+                        doProduceItem(pBuilder, Unit_Soldier);
+                        itemCount[Unit_Soldier]++;
+                    }
+                } break;
+
+                case Structure_HighTechFactory: {
 					int ornithopterValue = data[Unit_Ornithopter][houseID].price * itemCount[Unit_Ornithopter];
 
 					if (pBuilder->isAvailableToBuild(Unit_Carryall)
@@ -1088,72 +1125,72 @@ void QuantBot::build(int militaryValue) {
 						}
 					}
 					else if (pBuilder->isAvailableToBuild(Unit_Ornithopter)
-						&& (militaryValue * ornithopterPercent > ornithopterValue)
-						&& (pBuilder->getProductionQueueSize() < 1)
-						&& !getHouse()->isAirUnitLimitReached()
-						&& money > 1200) {
+                        && (militaryValue * ornithopterPercent > ornithopterValue)
+                        && (pBuilder->getProductionQueueSize() < 1)
+                        && !getHouse()->isAirUnitLimitReached()
+                        && money > 1200) {
 						// Current value and what percentage of military we want used to determine
 						// whether to build an additional unit.
-						doProduceItem(pBuilder, Unit_Ornithopter);
-						itemCount[Unit_Ornithopter]++;
+                        doProduceItem(pBuilder, Unit_Ornithopter);
+                        itemCount[Unit_Ornithopter]++;
 						money -= data[Unit_Ornithopter][houseID].price;
 						militaryValue += data[Unit_Ornithopter][houseID].price;
-					}
-				} break;
+                    }
+                } break;
 
-				case Structure_HeavyFactory: {
-					// only if the factory isn't busy
+                case Structure_HeavyFactory: {
+                    // only if the factory isn't busy
 					if ((pBuilder->isUpgrading() == false) && (pBuilder->getProductionQueueSize() < 1) && (pBuilder->getBuildListSize() > 0)) {
-						// we need a construction yard. Build an MCV if we don't have a starport
+                        // we need a construction yard. Build an MCV if we don't have a starport
 						if ((difficulty == Difficulty::Hard || difficulty == Difficulty::Brutal)
-							&& itemCount[Unit_MCV] + itemCount[Structure_ConstructionYard] + itemCount[Structure_StarPort] < 1
-							&& pBuilder->isAvailableToBuild(Unit_MCV)
-							&& !getHouse()->isGroundUnitLimitReached()) {
-							doProduceItem(pBuilder, Unit_MCV);
-							itemCount[Unit_MCV]++;
-						}
+                            && itemCount[Unit_MCV] + itemCount[Structure_ConstructionYard] + itemCount[Structure_StarPort] < 1
+                            && pBuilder->isAvailableToBuild(Unit_MCV)
+                            && !getHouse()->isGroundUnitLimitReached()) {
+                            doProduceItem(pBuilder, Unit_MCV);
+                            itemCount[Unit_MCV]++;
+                        }
 						else if ((money > 10000) && (pBuilder->isUpgrading() == false) && (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel())) {
 							if (pBuilder->getHealth() >= pBuilder->getMaxHealth()) {
-								doUpgrade(pBuilder);
+                                doUpgrade(pBuilder);
 							}
 							else {
-								doRepair(pBuilder);
-							}
-						}
+                                doRepair(pBuilder);
+                            }
+                        }
 						else if (gameMode == GameMode::Custom && (itemCount[Structure_ConstructionYard] + itemCount[Unit_MCV]) * 10000 < money
-							&& pBuilder->isAvailableToBuild(Unit_MCV)
-							&& itemCount[Structure_ConstructionYard] + itemCount[Unit_MCV] < 4
-							&& !getHouse()->isGroundUnitLimitReached()) {
+                            && pBuilder->isAvailableToBuild(Unit_MCV)
+                            && itemCount[Structure_ConstructionYard] + itemCount[Unit_MCV] < 4
+                            && !getHouse()->isGroundUnitLimitReached()) {
 							// If we are really rich, like in all against Atriedes
-							doProduceItem(pBuilder, Unit_MCV);
-							itemCount[Unit_MCV]++;
-						}
+                            doProduceItem(pBuilder, Unit_MCV);
+                            itemCount[Unit_MCV]++;
+                        }
 						else if (gameMode == GameMode::Custom
-							&& pBuilder->isAvailableToBuild(Unit_Harvester)
-							&& !getHouse()->isGroundUnitLimitReached()
-							&& itemCount[Unit_Harvester] < militaryValue / 1000
-							&& itemCount[Unit_Harvester] < harvesterLimit) {
-							// In case we get given lots of money, it will eventually run out so we need to be prepared
-							doProduceItem(pBuilder, Unit_Harvester);
-							itemCount[Unit_Harvester]++;
-						}
+                            && pBuilder->isAvailableToBuild(Unit_Harvester)
+                            && !getHouse()->isGroundUnitLimitReached()
+                            && itemCount[Unit_Harvester] < militaryValue / 1000
+                            && itemCount[Unit_Harvester] < harvesterLimit) {
+                            // In case we get given lots of money, it will eventually run out so we need to be prepared
+                            doProduceItem(pBuilder, Unit_Harvester);
+                            itemCount[Unit_Harvester]++;
+                        }
 						else if (itemCount[Unit_Harvester] < harvesterLimit
-							&& pBuilder->isAvailableToBuild(Unit_Harvester)
-							&& !getHouse()->isGroundUnitLimitReached()
-							&& (money < 2000 || gameMode == GameMode::Campaign)) {
+                            && pBuilder->isAvailableToBuild(Unit_Harvester)
+                            && !getHouse()->isGroundUnitLimitReached()
+                            && (money < 2000 || gameMode == GameMode::Campaign)) {
 							//logDebug("*Building a Harvester.",
 							//itemCount[Unit_Harvester], harvesterLimit, money);
-							doProduceItem(pBuilder, Unit_Harvester);
-							itemCount[Unit_Harvester]++;
-						}
+                            doProduceItem(pBuilder, Unit_Harvester);
+                            itemCount[Unit_Harvester]++;
+                        }
 						else if ((money > 500) && (pBuilder->isUpgrading() == false) && (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel())) {
 							if (pBuilder->getHealth() >= pBuilder->getMaxHealth()) {
-								doUpgrade(pBuilder);
+                                doUpgrade(pBuilder);
 							}
 							else {
-								doRepair(pBuilder);
-							}
-						}
+                                doRepair(pBuilder);
+                            }
+                        }
 						else if (money > 2000 && militaryValue < militaryValueLimit && !getHouse()->isGroundUnitLimitReached()) {
 							// TODO: This entire section needs to be refactored to make it more generic
 							// Limit enemy military units based on difficulty
@@ -1208,43 +1245,43 @@ void QuantBot::build(int militaryValue) {
 						}
 					}
 
-				} break;
+                } break;
 
-				case Structure_StarPort: {
-					const StarPort* pStarPort = static_cast<const StarPort*>(pBuilder);
+                case Structure_StarPort: {
+                    const StarPort* pStarPort = static_cast<const StarPort*>(pBuilder);
 					if (pStarPort->okToOrder()) {
-						const Choam& choam = getHouse()->getChoam();
+                        const Choam& choam = getHouse()->getChoam();
 
-						// We need a construction yard!!
+                        // We need a construction yard!!
 						if ((difficulty == Difficulty::Hard || difficulty == Difficulty::Brutal)
-							&& pStarPort->isAvailableToBuild(Unit_MCV)
-							&& choam.getNumAvailable(Unit_MCV) > 0
-							&& itemCount[Structure_ConstructionYard] + itemCount[Unit_MCV] < 1) {
-							doProduceItem(pBuilder, Unit_MCV);
-							itemCount[Unit_MCV]++;
-							money = money - choam.getPrice(Unit_MCV);
-						}
+                            && pStarPort->isAvailableToBuild(Unit_MCV)
+                            && choam.getNumAvailable(Unit_MCV) > 0
+                            && itemCount[Structure_ConstructionYard] + itemCount[Unit_MCV] < 1) {
+                            doProduceItem(pBuilder, Unit_MCV);
+                            itemCount[Unit_MCV]++;
+                            money = money - choam.getPrice(Unit_MCV);
+                        }
 
 						if (money > choam.getPrice(Unit_Carryall) && choam.getNumAvailable(Unit_Carryall) > 0 && itemCount[Unit_Carryall] == 0) {
 							// Get at least one Carryall
-							doProduceItem(pBuilder, Unit_Carryall);
-							itemCount[Unit_Carryall]++;
-							money = money - choam.getPrice(Unit_Carryall);
-						}
+                            doProduceItem(pBuilder, Unit_Carryall);
+                            itemCount[Unit_Carryall]++;
+                            money = money - choam.getPrice(Unit_Carryall);
+                        }
 
 						while (money > choam.getPrice(Unit_Harvester) && choam.getNumAvailable(Unit_Harvester) > 0 && itemCount[Unit_Harvester] < harvesterLimit) {
-							doProduceItem(pBuilder, Unit_Harvester);
-							itemCount[Unit_Harvester]++;
-							money = money - choam.getPrice(Unit_Harvester);
-						}
+                            doProduceItem(pBuilder, Unit_Harvester);
+                            itemCount[Unit_Harvester]++;
+                            money = money - choam.getPrice(Unit_Harvester);
+                        }
 
-						int itemCountUnits = itemCount[Unit_Tank] + itemCount[Unit_SiegeTank] + itemCount[Unit_Launcher] + itemCount[Unit_Harvester];
+                        int itemCountUnits = itemCount[Unit_Tank] + itemCount[Unit_SiegeTank] + itemCount[Unit_Launcher] + itemCount[Unit_Harvester];
 
 						while (money > choam.getPrice(Unit_Carryall) && choam.getNumAvailable(Unit_Carryall) > 0 && itemCount[Unit_Carryall] < itemCountUnits / 7) {
-							doProduceItem(pBuilder, Unit_Carryall);
-							itemCount[Unit_Carryall]++;
-							money = money - choam.getPrice(Unit_Carryall);
-						}
+                            doProduceItem(pBuilder, Unit_Carryall);
+                            itemCount[Unit_Carryall]++;
+                            money = money - choam.getPrice(Unit_Carryall);
+                        }
 
 						while (militaryValue < militaryValueLimit && money > choam.getPrice(Unit_SiegeTank) && choam.getNumAvailable(Unit_SiegeTank) > 0
 							&& choam.isCheap(Unit_SiegeTank) && militaryValue < militaryValueLimit && money > 2000) {
@@ -1282,231 +1319,221 @@ void QuantBot::build(int militaryValue) {
 
 
 
-						doPlaceOrder(pStarPort);
-					}
+                        doPlaceOrder(pStarPort);
+                    }
 
-				} break;
+                } break;
 
-				case Structure_ConstructionYard: {
+                case Structure_ConstructionYard: {
 
-					// If rocket turrets don't need power then let's build some for defense
-					int rocketTurretValue = itemCount[Structure_RocketTurret] * 250;
+                    // If rocket turrets don't need power then let's build some for defense
+                    int rocketTurretValue = itemCount[Structure_RocketTurret] * 250;
 
-					// disable rocket turrets for now
-					if (getGameInitSettings().getGameOptions().rocketTurretsNeedPower || true) {
-						rocketTurretValue = 1000000; // If rocket turrets need power we don't want to build them
-					}
+					// disable rocket turrets for now if power is required
+					if (getGameInitSettings().getGameOptions().rocketTurretsNeedPower) {
+                        rocketTurretValue = 1000000; // If rocket turrets need power we don't want to build them
+                    }
 
-					const ConstructionYard* pConstYard = static_cast<const ConstructionYard*>(pBuilder);
+                    const ConstructionYard* pConstYard = static_cast<const ConstructionYard*>(pBuilder);
 
-					if (!pBuilder->isUpgrading() && getHouse()->getCredits() > 100 && (pBuilder->getProductionQueueSize() < 1) && pBuilder->getBuildListSize()) {
+                    if (!pBuilder->isUpgrading() && getHouse()->getCredits() > 100 && (pBuilder->getProductionQueueSize() < 1) && pBuilder->getBuildListSize()) {
 
-						// Campaign Build order, iterate through the buildings, if the number that exist
-						// is less than the number that should exist, then build the one that is missing
+                        // Campaign Build order, iterate through the buildings, if the number that exist
+                        // is less than the number that should exist, then build the one that is missing
 
-						if (gameMode == GameMode::Campaign && difficulty != Difficulty::Brutal) {
-							//logDebug("GameMode Campaign.. ");
+                        if (gameMode == GameMode::Campaign && difficulty != Difficulty::Brutal) {
+                            //logDebug("GameMode Campaign.. ");
 
-							for (int i = Structure_FirstID; i <= Structure_LastID; i++) {
-								if (itemCount[i] < initialItemCount[i]
-									&& pBuilder->isAvailableToBuild(i)
-									&& findPlaceLocation(i).isValid()
-									&& !pBuilder->isUpgrading()
-									&& pBuilder->getProductionQueueSize() < 1) {
+                            for (int i = Structure_FirstID; i <= Structure_LastID; i++) {
+                                if (itemCount[i] < initialItemCount[i]
+                                    && pBuilder->isAvailableToBuild(i)
+                                    && findPlaceLocation(i).isValid()
+                                    && !pBuilder->isUpgrading()
+                                    && pBuilder->getProductionQueueSize() < 1) {
 
-									logDebug("***CampAI Build itemID: %o structure count: %o, initial count: %o", i, itemCount[i], initialItemCount[i]);
-									doProduceItem(pBuilder, i);
-									itemCount[i]++;
-								}
-							}
+                                    logDebug("***CampAI Build itemID: %o structure count: %o, initial count: %o", i, itemCount[i], initialItemCount[i]);
+                                    doProduceItem(pBuilder, i);
+                                    itemCount[i]++;
+                                }
+                            }
 
-							// If Campaign AI can't build military, let it build up its cash reserves and defenses
+                            // If Campaign AI can't build military, let it build up its cash reserves and defenses
 
-							if (pStructure->getHealth() < pStructure->getMaxHealth()) {
-								doRepair(pBuilder);
-							}
-							else if (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel()
-								&& !pBuilder->isUpgrading()
-								&& itemCount[Unit_Harvester] >= harvesterLimit) {
+                            if (pStructure->getHealth() < pStructure->getMaxHealth()) {
+                                doRepair(pBuilder);
+                            }
+                            else if (pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel()
+                                && !pBuilder->isUpgrading()
+                                && itemCount[Unit_Harvester] >= harvesterLimit) {
 
-								doUpgrade(pBuilder);
-								logDebug("***CampAI Upgrade builder");
-							}
-							else if ((getHouse()->getProducedPower() < getHouse()->getPowerRequirement())
-								&& pBuilder->isAvailableToBuild(Structure_WindTrap)
-								&& findPlaceLocation(Structure_WindTrap).isValid()
-								&& pBuilder->getProductionQueueSize() == 0) {
+                                doUpgrade(pBuilder);
+                                logDebug("***CampAI Upgrade builder");
+                            }
+                            else if ((getHouse()->getCapacity() < getHouse()->getStoredCredits() + 2000)
+                                && pBuilder->isAvailableToBuild(Structure_Silo)
+                                && findPlaceLocation(Structure_Silo).isValid()
+                                && pBuilder->getProductionQueueSize() == 0) {
 
-								doProduceItem(pBuilder, Structure_WindTrap);
-								itemCount[Structure_WindTrap]++;
+                                doProduceItem(pBuilder, Structure_Silo);
+                                itemCount[Structure_Silo]++;
 
-								logDebug("***CampAI Build A new Windtrap increasing count to: %d", itemCount[Structure_WindTrap]);
-							}
-							else if ((getHouse()->getCapacity() < getHouse()->getStoredCredits() + 2000)
-								&& pBuilder->isAvailableToBuild(Structure_Silo)
-								&& findPlaceLocation(Structure_Silo).isValid()
-								&& pBuilder->getProductionQueueSize() == 0) {
+                                logDebug("***CampAI Build A new Silo increasing count to: %d", itemCount[Structure_Silo]);
+                            }
+                            else if (money > 3000
+                                && pBuilder->isAvailableToBuild(Structure_RocketTurret)
+                                && findPlaceLocation(Structure_RocketTurret).isValid()
+                                && pBuilder->getProductionQueueSize() == 0
+                                && (itemCount[Structure_RocketTurret] <
+                                    (itemCount[Structure_Silo] + itemCount[Structure_Refinery]) * 2)) {
 
-								doProduceItem(pBuilder, Structure_Silo);
-								itemCount[Structure_Silo]++;
+                                doProduceItem(pBuilder, Structure_RocketTurret);
+                                itemCount[Structure_RocketTurret]++;
 
-								logDebug("***CampAI Build A new Silo increasing count to: %d", itemCount[Structure_Silo]);
-							}
-							else if (money > 3000
-								&& pBuilder->isAvailableToBuild(Structure_RocketTurret)
-								&& findPlaceLocation(Structure_RocketTurret).isValid()
-								&& pBuilder->getProductionQueueSize() == 0
-								&& (itemCount[Structure_RocketTurret] <
-									(itemCount[Structure_Silo] + itemCount[Structure_Refinery]) * 2)) {
+                                logDebug("***CampAI Build A new Rocket turret increasing count to: %d", itemCount[Structure_RocketTurret]);
+                            }
 
-								doProduceItem(pBuilder, Structure_RocketTurret);
-								itemCount[Structure_RocketTurret]++;
+                            buildTimer = getRandomGen().rand(0, 3) * 5;
+                        }
+                        else {
+                            // custom AI starts here:
 
-								logDebug("***CampAI Build A new Rocket turret increasing count to: %d", itemCount[Structure_RocketTurret]);
-							}
+                            Uint32 itemID = NONE_ID;
 
-							buildTimer = getRandomGen().rand(0, 3) * 5;
-						}
-						else {
-							// custom AI starts here:
+                            if (itemCount[Structure_WindTrap] == 0 && pBuilder->isAvailableToBuild(Structure_WindTrap)) {
+                                itemID = Structure_WindTrap;
+                                itemCount[Structure_WindTrap]++;
+                            }
+                            else if ((itemCount[Structure_Refinery] == 0 || itemCount[Structure_Refinery] < itemCount[Unit_Harvester] / 3) && pBuilder->isAvailableToBuild(Structure_Refinery)) {
+                                itemID = Structure_Refinery;
+                                itemCount[Unit_Harvester]++;
+                                itemCount[Structure_Refinery]++;
+                            }
+                            else if (itemCount[Structure_Refinery] < 3 && pBuilder->isAvailableToBuild(Structure_Refinery) && money < 4000) {
+                                itemID = Structure_Refinery;
+                                itemCount[Unit_Harvester]++;
+                                itemCount[Structure_Refinery]++;
+                            }
+                            else if (itemCount[Structure_StarPort] == 0 && pBuilder->isAvailableToBuild(Structure_StarPort) && findPlaceLocation(Structure_StarPort).isValid()) {
+                                itemID = Structure_StarPort;
+                            }
+                            else if (itemCount[Structure_Refinery] < 4
+                                && pBuilder->isAvailableToBuild(Structure_Refinery)
+                                && money < 4000) {
+                                itemID = Structure_Refinery;
+                                itemCount[Unit_Harvester]++;
+                                itemCount[Structure_Refinery]++;
+                            }
+                            else if (itemCount[Structure_LightFactory] == 0 && pBuilder->isAvailableToBuild(Structure_LightFactory) && ((itemCount[Unit_Harvester] > 4 && money > 1500) || money > 3000)) {
+                                itemID = Structure_LightFactory;
+                            }
+                            else if (itemCount[Structure_Radar] == 0 && pBuilder->isAvailableToBuild(Structure_Radar) && ((itemCount[Unit_Harvester] > 4 && money > 1500 || money > 3000))) {
+                                itemID = Structure_Radar;
+                            }
+                            else if (itemCount[Structure_HeavyFactory] == 0 && money > 10000 && pBuilder->isAvailableToBuild(Structure_HeavyFactory)) {
+                                itemID = Structure_HeavyFactory;
+                            }
+                            else if (itemCount[Structure_RepairYard] == 0 && pBuilder->isAvailableToBuild(Structure_RepairYard)) {
+                                itemID = Structure_RepairYard;
+                            }
+                            else if (itemCount[Structure_HeavyFactory] == 0 && money > 2000) {
+                                if (pBuilder->isAvailableToBuild(Structure_HeavyFactory)) {
+                                    itemID = Structure_HeavyFactory;
+                                }
+                            }
+                            else if (itemCount[Structure_HighTechFactory] == 0 && money > 2000) {
+                                if (pBuilder->isAvailableToBuild(Structure_HighTechFactory)) {
+                                    itemID = Structure_HighTechFactory;
+                                }
+                            }
+                            // If we need more refinerys for our harvesters or we don't have a heavy factory
+                            else if (((money > 2000 && itemCount[Structure_Refinery] * 3.5_fix < harvesterLimit)
+                                || (currentGame->techLevel < 4 && itemCount[Unit_Harvester] < harvesterLimit && money > 1000))
+                                && pBuilder->isAvailableToBuild(Structure_Refinery)) {
+                                itemID = Structure_Refinery;
+                                itemCount[Unit_Harvester]++;
+                                itemCount[Structure_Refinery]++;
 
-							Uint32 itemID = NONE_ID;
+                            }
+                            else if (itemCount[Structure_IX] == 0 && money > 2500) {
+                                // Let's trial special units
+                                if (pBuilder->isAvailableToBuild(Structure_IX)) {
+                                    itemID = Structure_IX;
+                                }
+                            }
+                            else if (pBuilder->isAvailableToBuild(Structure_RepairYard) && money > 2000
+                                && (itemCount[Structure_RepairYard] <= activeRepairYardCount // is this still working?
+                                    || itemCount[Structure_RepairYard] * 5000 < militaryValue)) {
+                                // If we have a lot of troops get some repair facilities
+                                itemID = Structure_RepairYard;
+                                //logDebug("Build Repair... active: %d  total: %d", activeRepairYardCount, getHouse()->getNumItems(Structure_RepairYard));
 
-							if (itemCount[Structure_WindTrap] == 0 && pBuilder->isAvailableToBuild(Structure_WindTrap)) {
-								itemID = Structure_WindTrap;
-								itemCount[Structure_WindTrap]++;
-							}
-							else if ((itemCount[Structure_Refinery] == 0 || itemCount[Structure_Refinery] < itemCount[Unit_Harvester] / 3) && pBuilder->isAvailableToBuild(Structure_Refinery)) {
-								itemID = Structure_Refinery;
-								itemCount[Unit_Harvester]++;
-								itemCount[Structure_Refinery]++;
-							}
-							else if (itemCount[Structure_Refinery] < 3 && pBuilder->isAvailableToBuild(Structure_Refinery) && money < 4000) {
-								itemID = Structure_Refinery;
-								itemCount[Unit_Harvester]++;
-								itemCount[Structure_Refinery]++;
-							}
-							else if (itemCount[Structure_StarPort] == 0 && pBuilder->isAvailableToBuild(Structure_StarPort) && findPlaceLocation(Structure_StarPort).isValid()) {
-								itemID = Structure_StarPort;
-							}
-							else if (itemCount[Structure_Refinery] < 4
-								&& pBuilder->isAvailableToBuild(Structure_Refinery)
-								&& money < 4000) {
-								itemID = Structure_Refinery;
-								itemCount[Unit_Harvester]++;
-								itemCount[Structure_Refinery]++;
-							}
-							else if (itemCount[Structure_LightFactory] == 0 && pBuilder->isAvailableToBuild(Structure_LightFactory) && ((itemCount[Unit_Harvester] > 4 && money > 1500) || money > 3000)) {
-								itemID = Structure_LightFactory;
-							}
-							else if (itemCount[Structure_Radar] == 0 && pBuilder->isAvailableToBuild(Structure_Radar) && ((itemCount[Unit_Harvester] > 4 && money > 1500 || money > 3000))) {
-								itemID = Structure_Radar;
-							}
-							else if (itemCount[Structure_HeavyFactory] == 0 && money > 10000 && pBuilder->isAvailableToBuild(Structure_HeavyFactory)) {
-								itemID = Structure_HeavyFactory;
-							}
-							else if (itemCount[Structure_RepairYard] == 0 && pBuilder->isAvailableToBuild(Structure_RepairYard)) {
-								itemID = Structure_RepairYard;
-							}
-							else if (itemCount[Structure_HeavyFactory] == 0 && money > 2000) {
-								if (pBuilder->isAvailableToBuild(Structure_HeavyFactory)) {
-									itemID = Structure_HeavyFactory;
-								}
-							}
-							else if (itemCount[Structure_HighTechFactory] == 0 && money > 2000) {
-								if (pBuilder->isAvailableToBuild(Structure_HighTechFactory)) {
-									itemID = Structure_HighTechFactory;
-								}
-							}
-							// If we need more refinerys for our harvesters or we don't have a heavy factory
-							else if (((money > 2000 && itemCount[Structure_Refinery] * 3.5_fix < harvesterLimit)
-								|| (currentGame->techLevel < 4 && itemCount[Unit_Harvester] < harvesterLimit && money > 1000))
-								&& pBuilder->isAvailableToBuild(Structure_Refinery)) {
-								itemID = Structure_Refinery;
-								itemCount[Unit_Harvester]++;
-								itemCount[Structure_Refinery]++;
+                            }
+                            else if (pBuilder->isAvailableToBuild(Structure_HeavyFactory)
+                                && (itemCount[Structure_HeavyFactory] <= activeHeavyFactoryCount && (money > 1000 + itemCount[Structure_HeavyFactory] * 1500) || itemCount[Structure_HeavyFactory] < 3 && money > 1000 + itemCount[Structure_HeavyFactory] * 2000) || (money > 1000 + itemCount[Structure_HeavyFactory] * 3000)) {
+                                // If we have a lot of money get more heavy factories
+                                itemID = Structure_HeavyFactory;
+                                logDebug("Build Factory... active: %d  total: %d", activeHeavyFactoryCount, getHouse()->getNumItems(Structure_HeavyFactory));
+                            }
+                            else if (itemCount[Structure_Refinery] * 3.5_fix < itemCount[Unit_Harvester] && pBuilder->isAvailableToBuild(Structure_Refinery)) {
+                                itemID = Structure_Refinery;
+                            }
+                            else if (getHouse()->getStoredCredits() + 1000 > (itemCount[Structure_Refinery] + itemCount[Structure_Silo]) * 1000 && pBuilder->isAvailableToBuild(Structure_Silo)) {
+                                // We are running out of spice storage capacity
+                                itemID = Structure_Silo;
+                            }
+                            else if (money > 8000
+                                && pBuilder->isAvailableToBuild(Structure_Palace)
+                                && getGameInitSettings().getGameOptions().onlyOnePalace
+                                && itemCount[Structure_Palace] == 0) {
+                                // Let's build one palace if its available
+                                itemID = Structure_Palace;
+                            }
+                            else if (money > 10000
+                                && pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel()) {
+                                // First off we need to upgrade the construction yard
+                                doUpgrade(pBuilder);
+                            }
+                            else if (money > 10000) {
+                                // Here are our luxury items:
+                                // - Rocket Turrets
+                                // - Palaces
+                                // Need to balance saving credits with expenditure on palaces and turrets
 
-							}
-							else if (itemCount[Structure_IX] == 0 && money > 2500) {
-								// Let's trial special units
-								if (pBuilder->isAvailableToBuild(Structure_IX)) {
-									itemID = Structure_IX;
-								}
-							}
-							else if (pBuilder->isAvailableToBuild(Structure_RepairYard) && money > 2000
-								&& (itemCount[Structure_RepairYard] <= activeRepairYardCount // is this still working?
-									|| itemCount[Structure_RepairYard] * 5000 < militaryValue)) {
-								// If we have a lot of troops get some repair facilities
-								itemID = Structure_RepairYard;
-								//logDebug("Build Repair... active: %d  total: %d", activeRepairYardCount, getHouse()->getNumItems(Structure_RepairYard));
+                                    //logDebug("Build Luxury.. money: %d  mildecifict: %d", money, militaryValueLimit - militaryValue);
+                                if (pBuilder->isAvailableToBuild(Structure_Palace)
+                                    && !getGameInitSettings().getGameOptions().onlyOnePalace) {
+                                    itemID = Structure_Palace;
+                                }
+                            }
 
-							}
-							else if (pBuilder->isAvailableToBuild(Structure_HeavyFactory)
-								&& (itemCount[Structure_HeavyFactory] <= activeHeavyFactoryCount && (money > 1000 + itemCount[Structure_HeavyFactory] * 1500) || itemCount[Structure_HeavyFactory] < 3 && money > 1000 + itemCount[Structure_HeavyFactory] * 2000) || (money > 1000 + itemCount[Structure_HeavyFactory] * 3000)) {
-								// If we have a lot of money get more heavy factories
-								itemID = Structure_HeavyFactory;
-								logDebug("Build Factory... active: %d  total: %d", activeHeavyFactoryCount, getHouse()->getNumItems(Structure_HeavyFactory));
-							}
-							else if (itemCount[Structure_Refinery] * 3.5_fix < itemCount[Unit_Harvester] && pBuilder->isAvailableToBuild(Structure_Refinery)) {
-								itemID = Structure_Refinery;
-							}
-							else if (getHouse()->getStoredCredits() + 1000 > (itemCount[Structure_Refinery] + itemCount[Structure_Silo]) * 1000 && pBuilder->isAvailableToBuild(Structure_Silo)) {
-								// We are running out of spice storage capacity
-								itemID = Structure_Silo;
-							}
-							else if (money > 8000
-								&& pBuilder->isAvailableToBuild(Structure_Palace)
-								&& getGameInitSettings().getGameOptions().onlyOnePalace
-								&& itemCount[Structure_Palace] == 0) {
-								// Let's build one palace if its available
-								itemID = Structure_Palace;
-							}
-							else if (money > 10000
-								&& pBuilder->getCurrentUpgradeLevel() < pBuilder->getMaxUpgradeLevel()) {
-								// First off we need to upgrade the construction yard
-								doUpgrade(pBuilder);
-							}
-							else if (money > 10000) {
-								// Here are our luxury items:
-								// - Rocket Turrets
-								// - Palaces
-								// Need to balance saving credits with expenditure on palaces and turrets
+                            // TODO: Build concrete if we have bad building spots
+                            if (pBuilder->isAvailableToBuild(itemID) && findPlaceLocation(itemID).isValid() && itemID != NONE_ID) {
+                                doProduceItem(pBuilder, itemID);
+                                itemCount[itemID]++;
+                            }/*else if(pBuilder->isAvailableToBuild(Structure_Slab1) && findPlaceLocation(Structure_Slab1).isValid()){
+                                doProduceItem(pBuilder, Structure_Slab1);
+                            }*/
 
-									//logDebug("Build Luxury.. money: %d  mildecifict: %d", money, militaryValueLimit - militaryValue);
-								if (pBuilder->isAvailableToBuild(Structure_Palace)
-									&& !getGameInitSettings().getGameOptions().onlyOnePalace) {
-									itemID = Structure_Palace;
-								}
-							}
+                        }
+                    }
 
-							// TODO: Build concrete if we have bad building spots
-							if (pBuilder->isAvailableToBuild(itemID) && findPlaceLocation(itemID).isValid() && itemID != NONE_ID) {
-								doProduceItem(pBuilder, itemID);
-								itemCount[itemID]++;
-							}/*else if(pBuilder->isAvailableToBuild(Structure_Slab1) && findPlaceLocation(Structure_Slab1).isValid()){
-								doProduceItem(pBuilder, Structure_Slab1);
-							}*/
+                    if (pBuilder->isWaitingToPlace()) {
+                        Coord location = findPlaceLocation(pBuilder->getCurrentProducedItem());
 
-						}
-					}
+                        if (location.isValid()) {
+                            doPlaceStructure(pConstYard, location.x, location.y);
+                        }
+                        else {
+                            doCancelItem(pConstYard, pBuilder->getCurrentProducedItem());
+                        }
+                    }
+                } break;
+                }
+            }
+        }
+    }
 
-					if (pBuilder->isWaitingToPlace()) {
-						Coord location = findPlaceLocation(pBuilder->getCurrentProducedItem());
-
-						if (location.isValid()) {
-							doPlaceStructure(pConstYard, location.x, location.y);
-						}
-						else {
-							doCancelItem(pConstYard, pBuilder->getCurrentProducedItem());
-						}
-					}
-				} break;
-				}
-			}
-		}
-	}
-
-	buildTimer = getRandomGen().rand(0, 3) * 5;
+    buildTimer = getRandomGen().rand(0, 3) * 5;
 }
 
 
@@ -1521,7 +1548,7 @@ void QuantBot::scrambleUnitsAndDefend(const ObjectBase* pIntruder, int numUnits)
 					doSetAttackMode(pUnit, AREAGUARD);
 
 					if (pUnit->getItemID() == Unit_Launcher || pUnit->getItemID() == Unit_Deviator) {
-						//doAttackObject(pUnit, pIntruder, true);
+						doAttackObject(pUnit, pIntruder, false);
 					}
 					else {
 						doAttackObject(pUnit, pIntruder, true);
@@ -1549,59 +1576,78 @@ void QuantBot::scrambleUnitsAndDefend(const ObjectBase* pIntruder, int numUnits)
 
 
 void QuantBot::attack(int militaryValue) {
+    // reset attack timer for every 15s
+    attackTimer = MILLI2CYCLES(15000);
 
-	// reset attack timer for every 15s
-	attackTimer = MILLI2CYCLES(15000);
+	
+	logDebug("Military Value %d / %d", militaryValue, militaryValueLimit);
 
-	// if AI is set to only defend then don't attack
-	if (difficulty == Difficulty::Defend) {
-		logDebug("Don't attack. Defend only AI");
-		return;
-		// Set max attack squad sizes for campaigns, AI will only attack with this number of units
-		// should move and refactor this to run once at start. Also should rework military value
-	}
+    // if AI is set to only defend then don't attack
+    if (difficulty == Difficulty::Defend) {
+        logDebug("Don't attack. Defend only AI");
+        return;
+    }
 
+    // Main attack loop for ground units
+    if (militaryValue < militaryValueLimit * 0.30_fix) {
+        logDebug("Don't attack. Not enough troops: dif: %d  mStr: %d  mLim: %d",
+            static_cast<Uint8>(difficulty), militaryValue, militaryValueLimit);
+        return;
+    }
 
-	if (militaryValue < militaryValueLimit * 0.35_fix) {
-		logDebug("Don't attack. Not enough troops: house: %d  dif: %d  mStr: %d  mLim: %d",
-			getHouse()->getHouseID(), static_cast<Uint8>(difficulty), militaryValue, militaryValueLimit, attackTimer);
-		return;
-	}
-
-	// Don't attack if you don't yet have a repair yard, if you are at least tech 5
-	if (getHouse()->getNumItems(Structure_RepairYard) == 0 && currentGame->techLevel > 4) {
+    // Don't attack if you don't yet have a repair yard, if you are at least tech 5
+    if (getHouse()->getNumItems(Structure_RepairYard) == 0 && currentGame->techLevel > 4) {
 		logDebug("Don't attack. Wait until you have a repair yard.");
-		return;
-	}
+        return;
+    }
 
 	int attackSquadSize = 0; // how many units AI will send in attack squad
-	int maxAttackSquadSize = 99; // max units that AI can send
-	
-	logDebug("Attack: house: %d  dif: %d  mStr: %d  mLim: %d  attackTimer: %d",
-		getHouse()->getHouseID(), static_cast<Uint8>(difficulty), militaryValue, militaryValueLimit, attackTimer);
+	int maxAttackSquadSize = 80; // max units that AI can send
+
+	// First count existing hunting units
+    for (const UnitBase* pUnit : getUnitList()) {
+        if (pUnit->isRespondable() 
+            && (pUnit->getOwner() == getHouse())
+            && pUnit->isActive()
+            && !pUnit->isBadlyDamaged()
+			&& pUnit->getAttackMode() == HUNT
+            && pUnit->getItemID() != Unit_Harvester
+            && pUnit->getItemID() != Unit_MCV
+            && pUnit->getItemID() != Unit_Carryall
+			&& pUnit->getItemID() != Unit_Ornithopter
+            && pUnit->getItemID() != Unit_Sandworm) {
+			attackSquadSize++;
+        }
+    }
 
 	Coord squadCenterLocation = findSquadCenter(getHouse()->getHouseID());
 
-	for (const UnitBase* pUnit : getUnitList()) {
-		if (pUnit->isRespondable()
-			&& (pUnit->getOwner() == getHouse())
-			&& pUnit->isActive()
-			&& pUnit->getItemID() != Unit_Harvester
-			&& pUnit->getItemID() != Unit_MCV
-			&& pUnit->getItemID() != Unit_Carryall
-			&& pUnit->getItemID() != Unit_Sandworm
-			&& pUnit->getHealth() / pUnit->getMaxHealth() > 0.7_fix)
+    for (const UnitBase* pUnit : getUnitList()) {
+        if (pUnit->isRespondable()
+            && (pUnit->getOwner() == getHouse())
+            && pUnit->isActive()
+            && !pUnit->isBadlyDamaged()
+            && !pUnit->wasForced()
+            && pUnit->getAttackMode() != RETREAT
+			&& pUnit->getAttackMode() != HUNT  // Don't add units that are already hunting
+            && pUnit->getItemID() != Unit_Harvester
+            && pUnit->getItemID() != Unit_MCV
+            && pUnit->getItemID() != Unit_Carryall
+			&& pUnit->getItemID() != Unit_Ornithopter
+			&& pUnit->getItemID() != Unit_Sandworm)
 
-		{
+		{	
 			if (attackSquadSize >= maxAttackSquadSize) {
+				logDebug("Attacking with %d units", attackSquadSize);
 				return; // return if we have reached the squad size for the map
 			}
 			else {
-				doSetAttackMode(pUnit, HUNT);
-				attackSquadSize++;
-			}
-		}
+            doSetAttackMode(pUnit, HUNT);
+            attackSquadSize++;
+        }
+    }
 	}
+	logDebug("Attacking with %d units", attackSquadSize);
 
 }
 
@@ -1797,11 +1843,19 @@ void QuantBot::checkAllUnits() {
 			} break;
 
 			case Unit_Harvester: {
-				
 				const Harvester* pHarvester = static_cast<const Harvester*>(pUnit);
-				if(getHouse()->getCredits() < 1000 && pHarvester != nullptr && pHarvester->isActive()
-					&& (pHarvester->getAmountOfSpice() >= HARVESTERMAXSPICE/2) && getHouse()->getNumItems(Structure_HeavyFactory) == 0) {
-					doReturn(pHarvester);
+				if(pHarvester != nullptr && pHarvester->isActive()) {
+					// Existing check for early return with half spice
+					if(getHouse()->getCredits() < 1000 && pHarvester->getAmountOfSpice() >= HARVESTERMAXSPICE/2 
+						&& getHouse()->getNumItems(Structure_HeavyFactory) == 0) {
+						doReturn(pHarvester);
+					}
+					
+					/* this needs to be fixed to make better, currently if they are trying to move somewhere it will trigger
+					// Check for idle harvesters
+					if(!pHarvester->isMoving() && !pHarvester->isHarvesting()) {
+						doSetAttackMode(pHarvester, GUARD);
+					}*/
 				}
 			} break;
 
@@ -1812,6 +1866,9 @@ void QuantBot::checkAllUnits() {
 			} break;
 
 			case Unit_Sandworm: {
+			} break;
+
+			case Unit_Ornithopter: {
 			} break;
 
 			default: {
@@ -1866,7 +1923,7 @@ void QuantBot::checkAllUnits() {
 						}
 					}
 				}
-				else if (pUnit->getAttackMode() != HUNT && !pUnit->hasATarget() && !pUnit->wasForced()) {
+				else if (pUnit->getItemID() != Unit_Ornithopter && pUnit->getAttackMode() != HUNT && !pUnit->hasATarget() && !pUnit->wasForced()) {
 					if (pUnit->getAttackMode() == AREAGUARD && squadCenterLocation.isValid() && (gameMode != GameMode::Campaign)) {
 						if (blockDistance(pUnit->getLocation(), squadCenterLocation) > squadRadius) {
 							if (!pUnit->hasATarget()) {
@@ -1896,4 +1953,67 @@ void QuantBot::checkAllUnits() {
 			}
 		}
 	}
+}
+
+FixPoint QuantBot::calculateDLR(Sint32 damageInflicted, int numLostItems, int unitPrice) {
+	if(damageInflicted <= 0) return 0_fix;
+	return FixPoint(damageInflicted) / FixPoint((1 + numLostItems) * unitPrice);
+}
+
+void QuantBot::airAttack() {
+	// If we have 2 or fewer ornithopters, make them patrol around base center
+	if (getHouse()->getNumItems(Unit_Ornithopter) <= 2) {
+		Coord baseCenter = getHouse()->getCenterOfMainBase();
+		if (baseCenter.isValid()) {
+			for (const UnitBase* pUnit : getUnitList()) {
+				if (pUnit->getItemID() == Unit_Ornithopter && pUnit->getOwner() == getHouse()) {
+					UnitBase* pOrnithopter = const_cast<UnitBase*>(pUnit);
+					if (pOrnithopter->getGuardPoint() != baseCenter) {
+						pOrnithopter->setGuardPoint(baseCenter);
+						doMove2Pos(pOrnithopter, baseCenter.x, baseCenter.y, false);
+					}
+				}
+			}
+		}
+		logDebug("Patroling with %d ornithopters", getHouse()->getNumItems(Unit_Ornithopter));
+		return;
+	}
+
+    logDebug("Air attack starting with %d ornithopters", getHouse()->getNumItems(Unit_Ornithopter));
+
+    
+    Coord squadRallyPoint = findSquadRallyLocation();
+    const ObjectBase* target = nullptr;
+    FixPoint closestDistance = FixPt_MAX;
+
+    // If we have enough ornithopters to hunt harvesters (3+)
+    if (getHouse()->getNumItems(Unit_Ornithopter) >= 3) {
+        logDebug("Looking for enemy harvesters...");
+        // Look for enemy harvesters first
+        for (const UnitBase* pUnit : getUnitList()) {
+            if (pUnit->getOwner()->getTeamID() != getHouse()->getTeamID() 
+                && pUnit->getItemID() == Unit_Harvester) {
+                FixPoint distance = blockDistance(squadRallyPoint, pUnit->getLocation());
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    target = pUnit;
+                    logDebug("Found enemy harvester at distance %f", distance.toDouble());
+                }
+            }
+        }
+
+        if (target != nullptr) {
+            logDebug("Commanding ornithopters to attack harvester");
+            // Found a harvester target, command ornithopters to attack
+            for (const UnitBase* pUnit : getUnitList()) {
+                if (pUnit->getOwner() == getHouse() 
+                    && pUnit->getItemID() == Unit_Ornithopter
+                    && pUnit->isActive()
+                    && !pUnit->isBadlyDamaged()) {
+                    doAttackObject(pUnit, target, true);
+                }
+            }
+            return;  // Exit early since we've handled the attack
+        }
+    }
 }

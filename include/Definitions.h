@@ -37,7 +37,7 @@
 #define DIAGONALSPEEDCONST (FixPt_SQRT2 >> 1)           // = sqrt(2)/2 = 0.707106781
 
 
-#define GAMESPEED_MAX 32
+#define GAMESPEED_MAX 64
 #define GAMESPEED_MIN 8
 #define GAMESPEED_DEFAULT 16
 #define MILLI2CYCLES(MILLISECONDS) ((MILLISECONDS)/GAMESPEED_DEFAULT)   // this is calculated in game milliseconds (dune 2 has about the same in game speed "fastest")

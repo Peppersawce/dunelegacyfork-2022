@@ -378,11 +378,8 @@ void UnitBase::deviate(House* newOwner) {
     if(getItemID() == Unit_Devastator || getItemID() == Unit_Ornithopter){
         newOwner->informHasDamaged(Unit_Deviator, currentGame->objectData.data[getItemID()][newOwner->getHouseID()].price);
     } else{
-        newOwner->informHasDamaged(Unit_Deviator, currentGame->objectData.data[getItemID()][newOwner->getHouseID()].price / 5);
+        newOwner->informHasDamaged(Unit_Deviator, currentGame->objectData.data[getItemID()][newOwner->getHouseID()].price / 10);
     }
-
-
-
 }
 
 void UnitBase::drawSelectionBox() {
@@ -948,7 +945,7 @@ void UnitBase::handleDamage(int damage, Uint32 damagerID, House* damagerOwner) {
     ObjectBase* pDamager = currentGame->getObjectManager().getObject(damagerID);
 
     if(pDamager != nullptr){
-
+        // Handle HUNT mode behavior
         if(attackMode == HUNT && !forced) {
             ObjectBase* pDamager = currentGame->getObjectManager().getObject(damagerID);
             if(canAttack(pDamager)) {
@@ -956,21 +953,16 @@ void UnitBase::handleDamage(int damage, Uint32 damagerID, House* damagerOwner) {
                     // no target or target not on weapon range => switch target
                     doAttackObject(pDamager, false);
                 }
-
             }
         }
 
-        /*
-         This method records the damage taken so that QuantBot can use it to know how effective different unit
-         classes are during the current game so that it can adjust its unit build ratios
-        */
-
-        // If you damaged your own unit then, the damage should be treated as negative.
-        if(damagerOwner == getOwner()){
-            damage *= -1;
+        // Track damage specifically for deviators since they have special behavior
+        if(pDamager->getItemID() == Unit_Deviator) {
+            if(damagerOwner == getOwner()){
+                damage *= -1;
+            }
+            damagerOwner->informHasDamaged(pDamager->getItemID(), damage);
         }
-
-        damagerOwner->informHasDamaged(pDamager->getItemID(), damage);
     }
 }
 

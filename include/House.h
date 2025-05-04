@@ -193,6 +193,13 @@ public:
 
     const std::list<std::unique_ptr<Player> >& getPlayerList() const { return players; };
 
+    /**
+        Calculates and updates the current military value of the house.
+        This includes all combat units but excludes harvesters, carryalls, MCVs and sandworms.
+        \return the calculated military value
+    */
+    int calculateMilitaryValue() const;
+
 protected:
     void decrementHarvesters();
 

@@ -228,8 +228,19 @@ int ObjectBase::getMaxHealth() const {
 void ObjectBase::handleDamage(int damage, Uint32 damagerID, House* damagerOwner) {
     if(damage >= 0) {
         FixPoint newHealth = getHealth();
-
         newHealth -= damage;
+
+        // Track damage dealt by the attacker
+        if(damagerOwner != nullptr) {
+            ObjectBase* pDamager = currentGame->getObjectManager().getObject(damagerID);
+            if(pDamager != nullptr) {
+                // If you damaged your own unit/structure then damage should be negative
+                if(damagerOwner == getOwner()) {
+                    damage *= -1;
+                }
+                damagerOwner->informHasDamaged(pDamager->getItemID(), damage);
+            }
+        }
 
         if(newHealth <= 0) {
             setHealth(0);
@@ -273,7 +284,7 @@ void ObjectBase::setDestination(int newX, int newY) {
 void ObjectBase::setHealth(FixPoint newHealth) {
     if((newHealth >= 0) && (newHealth <= getMaxHealth())) {
         health = newHealth;
-        badlyDamaged = (health/getMaxHealth() < BADLYDAMAGEDRATIO);
+        badlyDamaged = health < BADLYDAMAGEDRATIO * getMaxHealth();
     }
 }
 
@@ -402,37 +413,41 @@ const UnitBase* ObjectBase::findClosestTargetUnit() const {
 }
 
 const ObjectBase* ObjectBase::findClosestTarget() const {
-    const ObjectBase *pClosestObject = nullptr;
-    FixPoint closestDistance = FixPt_MAX;
-    for(const StructureBase* pStructure : structureList) {
-        if(canAttack(pStructure)) {
-            const auto closestPoint = pStructure->getClosestPoint(getLocation());
-            auto structureDistance = blockDistance(getLocation(), closestPoint);
+    // Start with small radius and expand outward
+    int maxRadius = std::max(currentGameMap->getSizeX(), currentGameMap->getSizeY());
+    
+    // Search in expanding rings
+    for(int radius = 1; radius <= maxRadius; radius++) {
+        // Check each coordinate in the current ring
+        for(int dx = -radius; dx <= radius; dx++) {
+            for(int dy = -radius; dy <= radius; dy++) {
+                // Only check coordinates that form the ring (not the inside)
+                if(abs(dx) != radius && abs(dy) != radius) {
+                    continue;
+                }
 
-            if(pStructure->getItemID() == Structure_Wall) {
-                    structureDistance += 20000000; //so that walls are targeted very last
-            }
+                int checkX = location.x + dx;
+                int checkY = location.y + dy;
 
-            if(structureDistance < closestDistance) {
-                closestDistance = structureDistance;
-                pClosestObject = pStructure;
+                // Skip if outside map bounds
+                if(!currentGameMap->tileExists(checkX, checkY)) {
+                    continue;
+                }
+
+                Tile* pTile = currentGameMap->getTile(checkX, checkY);
+                if(!pTile->hasAnObject()) {
+                    continue;
+                }
+
+                ObjectBase* pObject = pTile->getObject();
+                if(canAttack(pObject)) {
+                    return pObject;  // Found a valid target, return immediately
+                }
             }
         }
     }
 
-    for(const UnitBase* pUnit : unitList) {
-        if(canAttack(pUnit)) {
-            const auto closestPoint = pUnit->getClosestPoint(getLocation());
-            const auto unitDistance = blockDistance(getLocation(), closestPoint);
-
-            if(unitDistance < closestDistance) {
-                closestDistance = unitDistance;
-                pClosestObject = pUnit;
-            }
-        }
-    }
-
-    return pClosestObject;
+    return nullptr;  // No target found
 }
 
 const ObjectBase* ObjectBase::findTarget() const {

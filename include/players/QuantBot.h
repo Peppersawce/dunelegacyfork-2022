@@ -85,6 +85,8 @@ private:
     void retreatAllUnits();
     void build(int militaryValue);
     void attack(int militaryValue);
+    void airAttack();
+    FixPoint calculateDLR(Sint32 damageInflicted, int numLostItems, int unitPrice);
 
 };
 
