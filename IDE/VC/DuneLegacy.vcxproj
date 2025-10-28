@@ -75,21 +75,21 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>..\..\bin\$(Configuration)-$(Platform)\</OutDir>
     <IntDir>obj\$(Configuration)-$(Platform)\</IntDir>
-    <IncludePath>$(IncludePath);$(VC_IncludePath);$(WindowsSDK_IncludePath);$(ProjectDir)packages\sdl2.nuget.2.26.1\build\native\include;$(ProjectDir)packages\sdl2_mixer.nuget.2.6.2\build\native\include;$(ProjectDir)packages\sdl2_ttf.nuget.2.20.1\build\native\include</IncludePath>
-    <LibraryPath>$(LibraryPath);$(ProjectDir)packages\sdl2.nuget.2.26.1\build\native\lib\x64;$(ProjectDir)packages\sdl2_ttf.nuget.2.20.1\build\native\lib\x64;$(ProjectDir)packages\sdl2_mixer.nuget.2.6.2\build\native\lib\x64</LibraryPath>
+    <IncludePath>$(IncludePath);$(VC_IncludePath);$(WindowsSDK_IncludePath);..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include</IncludePath>
+    <LibraryPath>$(LibraryPath);$(OutDir);..\..\external\SDL\VisualC\SDL\x64\Debug;..\..\external\SDL\VisualC\SDLmain\x64\Debug;x64\Debug</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>..\..\bin\$(Configuration)-$(Platform)\</OutDir>
     <IntDir>obj\$(Configuration)-$(Platform)\</IntDir>
-    <IncludePath>$(IncludePath);$(VC_IncludePath);$(WindowsSDK_IncludePath);$(ProjectDir)packages\sdl2.nuget.2.26.1\build\native\include;$(ProjectDir)packages\sdl2_mixer.nuget.2.6.2\build\native\include;$(ProjectDir)packages\sdl2_ttf.nuget.2.20.1\build\native\include</IncludePath>
-    <LibraryPath>$(LibraryPath);$(ProjectDir)packages\sdl2.nuget.2.26.1\build\native\lib\x64;$(ProjectDir)packages\sdl2_ttf.nuget.2.20.1\build\native\lib\x64;$(ProjectDir)packages\sdl2_mixer.nuget.2.6.2\build\native\lib\x64</LibraryPath>
+    <IncludePath>$(IncludePath);$(VC_IncludePath);$(WindowsSDK_IncludePath);..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include</IncludePath>
+    <LibraryPath>$(LibraryPath);$(OutDir);..\..\external\SDL\VisualC\SDL\x64\Release;..\..\external\SDL\VisualC\SDLmain\x64\Release;x64\Release</LibraryPath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningVersion>
@@ -100,7 +100,7 @@
       <MinimalRebuild>false</MinimalRebuild>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>SDL2maind.lib;ws2_32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;ws2_32.lib;winmm.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
     </Link>
     <PostBuildEvent>
@@ -113,8 +113,8 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;_SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING;_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningVersion>
       </WarningVersion>
@@ -122,15 +122,18 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <ForcedIncludeFiles>stdafx.h</ForcedIncludeFiles>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <MinimalRebuild>false</MinimalRebuild>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>ws2_32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_mixer.lib;SDL2_ttf.lib;usp10.lib;gdi32.lib;rpcrt4.lib;ws2_32.lib;winmm.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories);.\packages\sdl2.nuget.2.26.1\build\native\lib\x64</AdditionalLibraryDirectories>
     </Link>
-    <PostBuildEvent />
     <PostBuildEvent>
-      <Command>robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+      <Command>copy "x64\Debug\SDL2.dll" "$(OutDir)" 2&gt;nul || echo SDL2.dll not found
+copy "x64\Debug\SDL2main.dll" "$(OutDir)" 2&gt;nul || echo SDL2main.dll not found
+copy "x64\Debug\SDL2_mixer.dll" "$(OutDir)" 2&gt;nul || echo SDL2_mixer.dll not found
+copy "x64\Debug\SDL2_ttf.dll" "$(OutDir)" 2&gt;nul || echo SDL2_ttf.dll not found
+robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -140,8 +143,11 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -150,7 +156,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       </WarningVersion>
       <DisableSpecificWarnings>4267</DisableSpecificWarnings>
       <ForcedIncludeFiles>stdafx.h</ForcedIncludeFiles>
-      <LanguageStandard>stdcpp20</LanguageStandard>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <FloatingPointModel>Fast</FloatingPointModel>
@@ -158,7 +164,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>SDL2.lib;SDL2main.lib;SDL2_ttf.lib;SDL2_mixer.lib;imm32.lib;version.lib;ws2_32.lib;winmm.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;imm32.lib;version.lib;ws2_32.lib;winmm.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
     </Link>
     <PostBuildEvent>
@@ -172,17 +178,20 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <FloatingPointModel>Fast</FloatingPointModel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;_SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING;_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <AdditionalIncludeDirectories>..\..\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningVersion>
       </WarningVersion>
       <DisableSpecificWarnings>4267</DisableSpecificWarnings>
       <ForcedIncludeFiles>stdafx.h</ForcedIncludeFiles>
-      <LanguageStandard>Default</LanguageStandard>
+      <LanguageStandard>stdcpp17</LanguageStandard>
       <LanguageStandard_C>Default</LanguageStandard_C>
       <DebugInformationFormat>None</DebugInformationFormat>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
@@ -190,13 +199,15 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>imm32.lib;version.lib;ws2_32.lib;winmm.lib;SDL2.lib;SDL2main.lib;SDL2_ttf.lib;SDL2_mixer.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>SDL2.lib;SDL2main.lib;imm32.lib;version.lib;ws2_32.lib;winmm.lib;usp10.lib;gdi32.lib;rpcrt4.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
-      <AdditionalLibraryDirectories>C:\source\dune\dunelegacy-code\IDE\VC\packages\sdl2_mixer.nuget.2.8.1\build\native\lib\x64;C:\source\dune\dunelegacy-code\IDE\VC\packages\sdl2.nuget.2.32.4\build\native\lib\x64;C:\source\dune\dunelegacy-code\IDE\VC\packages\sdl2_ttf.nuget.2.24.0\build\native\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
-    <PostBuildEvent />
     <PostBuildEvent>
-      <Command>robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+      <Command>copy "x64\Release\SDL2.dll" "$(OutDir)" 2&gt;nul || echo SDL2.dll not found
+copy "x64\Release\SDL2main.dll" "$(OutDir)" 2&gt;nul || echo SDL2main.dll not found
+copy "x64\Release\SDL2_mixer.dll" "$(OutDir)" 2&gt;nul || echo SDL2_mixer.dll not found
+copy "x64\Release\SDL2_ttf.dll" "$(OutDir)" 2&gt;nul || echo SDL2_ttf.dll not found
+robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -474,6 +485,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClInclude Include="..\..\include\units\Trooper.h" />
     <ClInclude Include="..\..\include\units\UnitBase.h" />
     <ClInclude Include="stdafx.h" />
+    <ClInclude Include="..\..\include\AITeamInfo.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\..\src\AStarSearch.cpp" />
@@ -793,6 +805,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClCompile Include="..\..\src\Game.cpp" />
     <ClCompile Include="..\..\src\GameInitSettings.cpp" />
     <ClCompile Include="..\..\src\GameInterface.cpp" />
+    <ClCompile Include="..\..\src\CursorManager.cpp" />
     <ClCompile Include="..\..\src\globals.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">NotUsing</PrecompiledHeader>
@@ -960,27 +973,26 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
   <ItemGroup>
     <ResourceCompile Include="..\..\resource.rc" />
   </ItemGroup>
-  <ItemGroup>
-    <None Include="packages.config" />
-  </ItemGroup>
+
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="packages\sdl2.nuget.redist.2.32.4\build\native\sdl2.nuget.redist.targets" Condition="Exists('packages\sdl2.nuget.redist.2.32.4\build\native\sdl2.nuget.redist.targets')" />
-    <Import Project="packages\sdl2.nuget.2.32.4\build\native\sdl2.nuget.targets" Condition="Exists('packages\sdl2.nuget.2.32.4\build\native\sdl2.nuget.targets')" />
-    <Import Project="packages\sdl2_mixer.nuget.redist.2.8.1\build\native\sdl2_mixer.nuget.redist.targets" Condition="Exists('packages\sdl2_mixer.nuget.redist.2.8.1\build\native\sdl2_mixer.nuget.redist.targets')" />
-    <Import Project="packages\sdl2_mixer.nuget.2.8.1\build\native\sdl2_mixer.nuget.targets" Condition="Exists('packages\sdl2_mixer.nuget.2.8.1\build\native\sdl2_mixer.nuget.targets')" />
-    <Import Project="packages\sdl2_ttf.nuget.redist.2.24.0\build\native\sdl2_ttf.nuget.redist.targets" Condition="Exists('packages\sdl2_ttf.nuget.redist.2.24.0\build\native\sdl2_ttf.nuget.redist.targets')" />
-    <Import Project="packages\sdl2_ttf.nuget.2.24.0\build\native\sdl2_ttf.nuget.targets" Condition="Exists('packages\sdl2_ttf.nuget.2.24.0\build\native\sdl2_ttf.nuget.targets')" />
   </ImportGroup>
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('packages\sdl2.nuget.redist.2.32.4\build\native\sdl2.nuget.redist.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2.nuget.redist.2.32.4\build\native\sdl2.nuget.redist.targets'))" />
-    <Error Condition="!Exists('packages\sdl2.nuget.2.32.4\build\native\sdl2.nuget.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2.nuget.2.32.4\build\native\sdl2.nuget.targets'))" />
-    <Error Condition="!Exists('packages\sdl2_mixer.nuget.redist.2.8.1\build\native\sdl2_mixer.nuget.redist.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2_mixer.nuget.redist.2.8.1\build\native\sdl2_mixer.nuget.redist.targets'))" />
-    <Error Condition="!Exists('packages\sdl2_mixer.nuget.2.8.1\build\native\sdl2_mixer.nuget.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2_mixer.nuget.2.8.1\build\native\sdl2_mixer.nuget.targets'))" />
-    <Error Condition="!Exists('packages\sdl2_ttf.nuget.redist.2.24.0\build\native\sdl2_ttf.nuget.redist.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2_ttf.nuget.redist.2.24.0\build\native\sdl2_ttf.nuget.redist.targets'))" />
-    <Error Condition="!Exists('packages\sdl2_ttf.nuget.2.24.0\build\native\sdl2_ttf.nuget.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\sdl2_ttf.nuget.2.24.0\build\native\sdl2_ttf.nuget.targets'))" />
-  </Target>
+  <ItemGroup>
+    <ProjectReference Include="..\..\external\SDL\VisualC\SDL\SDL.vcxproj">
+      <Project>{81CE8DAF-EBB2-4761-8E45-B71ABCCA8C68}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\external\SDL\VisualC\SDLmain\SDLmain.vcxproj">
+      <Project>{DA956FD3-E142-46F2-9DD5-C78BEBB56B7A}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\external\SDL_mixer\VisualC\SDL_mixer.vcxproj">
+      <Project>{F7E944B3-0815-40CD-B3E4-90B2A15B0E33}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\..\external\SDL_ttf\VisualC\SDL_ttf.vcxproj">
+      <Project>{DDDBD07D-DC76-4AF6-8D02-3E2DEB6EE255}</Project>
+    </ProjectReference>
+              <ProjectReference Include="..\..\external\freetype\builds\windows\vc2010\freetype.vcxproj">
+            <Project>{78B079BD-9FC7-4B9E-B4A6-96DA0F00248B}</Project>
+          </ProjectReference>
+  </ItemGroup>
+
 </Project>

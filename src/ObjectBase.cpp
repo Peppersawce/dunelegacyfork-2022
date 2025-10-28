@@ -273,7 +273,7 @@ void ObjectBase::setDestination(int newX, int newY) {
 void ObjectBase::setHealth(FixPoint newHealth) {
     if((newHealth >= 0) && (newHealth <= getMaxHealth())) {
         health = newHealth;
-        badlyDamaged = (health/getMaxHealth() < BADLYDAMAGEDRATIO);
+        badlyDamaged = health < BADLYDAMAGEDRATIO * getMaxHealth();
     }
 }
 
@@ -402,49 +402,53 @@ const UnitBase* ObjectBase::findClosestTargetUnit() const {
 }
 
 const ObjectBase* ObjectBase::findClosestTarget() const {
-    const ObjectBase *pClosestObject = nullptr;
-    FixPoint closestDistance = FixPt_MAX;
-    for(const StructureBase* pStructure : structureList) {
-        if(canAttack(pStructure)) {
-            const auto closestPoint = pStructure->getClosestPoint(getLocation());
-            auto structureDistance = blockDistance(getLocation(), closestPoint);
+    // Start with small radius and expand outward
+    int maxRadius = std::max(currentGameMap->getSizeX(), currentGameMap->getSizeY());
+    
+    // Search in expanding rings
+    for(int radius = 1; radius <= maxRadius; radius++) {
+        // Check each coordinate in the current ring
+        for(int dx = -radius; dx <= radius; dx++) {
+            for(int dy = -radius; dy <= radius; dy++) {
+                // Only check coordinates that form the ring (not the inside)
+                if(abs(dx) != radius && abs(dy) != radius) {
+                    continue;
+                }
 
-            if(pStructure->getItemID() == Structure_Wall) {
-                    structureDistance += 20000000; //so that walls are targeted very last
-            }
+                int checkX = location.x + dx;
+                int checkY = location.y + dy;
 
-            if(structureDistance < closestDistance) {
-                closestDistance = structureDistance;
-                pClosestObject = pStructure;
+                // Skip if outside map bounds
+                if(!currentGameMap->tileExists(checkX, checkY)) {
+                    continue;
+                }
+
+                Tile* pTile = currentGameMap->getTile(checkX, checkY);
+                if(!pTile->hasAnObject()) {
+                    continue;
+                }
+
+                ObjectBase* pObject = pTile->getObject();
+                if(canAttack(pObject)) {
+                    return pObject;  // Found a valid target, return immediately
+                }
             }
         }
     }
 
-    for(const UnitBase* pUnit : unitList) {
-        if(canAttack(pUnit)) {
-            const auto closestPoint = pUnit->getClosestPoint(getLocation());
-            const auto unitDistance = blockDistance(getLocation(), closestPoint);
-
-            if(unitDistance < closestDistance) {
-                closestDistance = unitDistance;
-                pClosestObject = pUnit;
-            }
-        }
-    }
-
-    return pClosestObject;
+    return nullptr;  // No target found
 }
 
 const ObjectBase* ObjectBase::findTarget() const {
-//searches for a target in an area like as shown below
-//
-//                    *
-//                  *****
-//                  *****
-//                 ***T***
-//                  *****
-//                  *****
-//                    *
+    //searches for a target in an area like as shown below
+    //
+    //                    *
+    //                  *****
+    //                  *****
+    //                 ***T***
+    //                  *****
+    //                  *****
+    //                    *
 
     auto checkRange = 0;
     switch(attackMode) {
@@ -478,30 +482,51 @@ const ObjectBase* ObjectBase::findTarget() const {
     ObjectBase *pClosestTarget = nullptr;
     auto closestTargetDistance = FixPt_MAX;
 
-    Coord coord;
-    const auto startY = std::max(0, location.y - checkRange);
-    const auto endY = std::min(currentGameMap->getSizeY()-1, location.y + checkRange);
-    for(coord.y = startY; coord.y <= endY; coord.y++) {
-        const auto startX = std::max(0, location.x - checkRange);
-        const auto endX = std::min(currentGameMap->getSizeX()-1, location.x + checkRange);
-        for(coord.x = startX; coord.x <= endX; coord.x++) {
+    // Start from center and expand outward in rings
+    for(auto ring = 0; ring <= checkRange; ring++) {
+        // Check each point in the current ring
+        for(auto x = -ring; x <= ring; x++) {
+            for(auto y = -ring; y <= ring; y++) {
+                // Only check points on the ring's perimeter
+                if(std::abs(x) != ring && std::abs(y) != ring) {
+                    continue;
+                }
 
-            const auto targetDistance = blockDistance(location, coord);
-            if(targetDistance <= checkRange) {
-                Tile* pTile = currentGameMap->getTile(coord);
-                if( pTile->isExploredByTeam(getOwner()->getTeamID())
-                    && !pTile->isFoggedByTeam(getOwner()->getTeamID())
-                    && pTile->hasAnObject()) {
+                const auto checkX = location.x + x;
+                const auto checkY = location.y + y;
 
-                    const auto pNewTarget = pTile->getObject();
-                    if(((pNewTarget->getItemID() != Structure_Wall && pNewTarget->getItemID() != Unit_Carryall) || pClosestTarget == nullptr) && canAttack(pNewTarget)) {
-                        if(targetDistance < closestTargetDistance) {
-                            pClosestTarget = pNewTarget;
-                            closestTargetDistance = targetDistance;
+                // Skip if out of bounds
+                if(checkX < 0 || checkX >= currentGameMap->getSizeX() ||
+                   checkY < 0 || checkY >= currentGameMap->getSizeY()) {
+                    continue;
+                }
+
+                const auto targetDistance = blockDistance(location, Coord(checkX, checkY));
+                if(targetDistance <= checkRange) {
+                    Tile* pTile = currentGameMap->getTile(Coord(checkX, checkY));
+                    if(pTile->isExploredByTeam(getOwner()->getTeamID()) &&
+                       !pTile->isFoggedByTeam(getOwner()->getTeamID()) &&
+                       pTile->hasAnObject()) {
+
+                        const auto pNewTarget = pTile->getObject();
+                        if(((pNewTarget->getItemID() != Structure_Wall && 
+                             pNewTarget->getItemID() != Unit_Carryall) || 
+                            pClosestTarget == nullptr) && 
+                           canAttack(pNewTarget)) {
+                            if(targetDistance < closestTargetDistance) {
+                                pClosestTarget = pNewTarget;
+                                closestTargetDistance = targetDistance;
+                            }
                         }
                     }
                 }
             }
+        }
+
+        // If we found a target in this ring, we can stop searching
+        // as we won't find a closer one in outer rings
+        if(pClosestTarget != nullptr) {
+            break;
         }
     }
 

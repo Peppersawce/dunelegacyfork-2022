@@ -32,6 +32,7 @@
 #include <players/Player.h>
 #include <players/HumanPlayer.h>
 #include <misc/SDL2pp.h>
+#include <CursorManager.h>
 
 #include <DataTypes.h>
 
@@ -163,6 +164,8 @@ public:
         Draws the cursor.
     */
     void drawCursor() const;
+    void updateCursor();
+    void setCursorMode(int mode);
 
     /**
         This method sets up the view. The start position is the center point of all owned units/structures
@@ -571,6 +574,8 @@ private:
 
     CommandManager      cmdManager;             ///< This is the manager for all the game commands (e.g. moving a unit)
 
+    CursorManager       cursorManager;          ///< This manages all hardware cursors
+
     TriggerManager      triggerManager;         ///< This is the manager for all the triggers the scenario has (e.g. reinforcements)
 
     bool    bQuitGame = false;                  ///< Should the game be quited after this game tick
@@ -605,6 +610,16 @@ private:
     std::map<Uint8, Player*> playerID2Player;               ///< mapping player ids to players (one entry per player)
 
     std::array<std::unique_ptr<House>, NUM_HOUSES> house;   ///< All the houses of this game, index by their houseID; has the size NUM_HOUSES; unused houses are nullptr
+
+    // Game loop methods
+    void initializeGameLoop();
+    void renderFrame();
+    void processInput();
+    void processNetwork();
+    void updateGameState();
+    bool handleNetworkUpdates();
+    void initializeReplay();
+    void initializeNetwork();
 };
 
 #endif // GAME_H

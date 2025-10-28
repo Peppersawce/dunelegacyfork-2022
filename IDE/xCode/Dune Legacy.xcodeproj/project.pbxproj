@@ -20,6 +20,7 @@
 		1358FE2213D3B72F00FAD5B7 /* Choam.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD5C13D3B72E00FAD5B7 /* Choam.cpp */; };
 		1358FE2313D3B72F00FAD5B7 /* Command.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD5D13D3B72E00FAD5B7 /* Command.cpp */; };
 		1358FE2413D3B72F00FAD5B7 /* CommandManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD5E13D3B72E00FAD5B7 /* CommandManager.cpp */; };
+		1358FE2413D3B72F00FAD5C8 /* CursorManager.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD5E13D3B72E00FAD5C8 /* CursorManager.cpp */; };
 		1358FE2513D3B72F00FAD5B7 /* CrossBlendVideoEvent.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD6013D3B72E00FAD5B7 /* CrossBlendVideoEvent.cpp */; };
 		1358FE2613D3B72F00FAD5B7 /* CutScene.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD6113D3B72E00FAD5B7 /* CutScene.cpp */; };
 		1358FE2713D3B72F00FAD5B7 /* CutSceneTrigger.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 1358FD6213D3B72E00FAD5B7 /* CutSceneTrigger.cpp */; };
@@ -419,7 +420,6 @@
 
 /* Begin PBXFileReference section */
 		1058C7A1FEA54F0111CA2CBB /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = /System/Library/Frameworks/Cocoa.framework; sourceTree = "<absolute>"; };
-		1309680010B6E51E00B22CFC /* MacFunctions.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = MacFunctions.h; sourceTree = "<group>"; };
 		1309680110B6E51E00B22CFC /* MacFunctions.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = MacFunctions.m; sourceTree = "<group>"; };
 		1322B17110A8CB9C00F8825D /* Dune Legacy.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Dune Legacy.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		134D2FE80F38F178001B38EF /* LEGACY.PAK */ = {isa = PBXFileReference; lastKnownFileType = file; name = LEGACY.PAK; path = ../../data/LEGACY.PAK; sourceTree = SOURCE_ROOT; };
@@ -428,6 +428,7 @@
 		1358FB6813D3B71500FAD5B7 /* Choam.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Choam.h; sourceTree = "<group>"; };
 		1358FB6913D3B71500FAD5B7 /* Command.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = Command.h; sourceTree = "<group>"; };
 		1358FB6A13D3B71500FAD5B7 /* CommandManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CommandManager.h; sourceTree = "<group>"; };
+		1358FB6A13D3B71500FAD5C8 /* CursorManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CursorManager.h; sourceTree = "<group>"; };
 		1358FB6B13D3B71500FAD5B7 /* ConcatIterator.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ConcatIterator.h; sourceTree = "<group>"; };
 		1358FB6C13D3B71500FAD5B7 /* config.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = config.h; sourceTree = "<group>"; };
 		1358FB6E13D3B71500FAD5B7 /* CrossBlendVideoEvent.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = CrossBlendVideoEvent.h; sourceTree = "<group>"; };
@@ -650,6 +651,7 @@
 		1358FD5C13D3B72E00FAD5B7 /* Choam.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Choam.cpp; sourceTree = "<group>"; };
 		1358FD5D13D3B72E00FAD5B7 /* Command.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = Command.cpp; sourceTree = "<group>"; };
 		1358FD5E13D3B72E00FAD5B7 /* CommandManager.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CommandManager.cpp; sourceTree = "<group>"; };
+		1358FD5E13D3B72E00FAD5C8 /* CursorManager.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CursorManager.cpp; sourceTree = "<group>"; };
 		1358FD6013D3B72E00FAD5B7 /* CrossBlendVideoEvent.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CrossBlendVideoEvent.cpp; sourceTree = "<group>"; };
 		1358FD6113D3B72E00FAD5B7 /* CutScene.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CutScene.cpp; sourceTree = "<group>"; };
 		1358FD6213D3B72E00FAD5B7 /* CutSceneTrigger.cpp */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.cpp; path = CutSceneTrigger.cpp; sourceTree = "<group>"; };
@@ -894,8 +896,8 @@
 		CE6BA2191E1004D6000640F9 /* 5P - 128x128 - Gridlocked.ini */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = "5P - 128x128 - Gridlocked.ini"; sourceTree = "<group>"; };
 		CE6BA21A1E1004D6000640F9 /* 5P - 128x128 - Meadow.ini */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = "5P - 128x128 - Meadow.ini"; sourceTree = "<group>"; };
 		CE6BA21B1E1004D6000640F9 /* 6P - 64x128 - Rocking Fields.ini */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = "6P - 64x128 - Rocking Fields.ini"; sourceTree = "<group>"; };
-		CE8E0B711E07438400A71916 /* SDL2_mixer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_mixer.framework; path = /Library/Frameworks/SDL2_mixer.framework; sourceTree = "<group>"; };
-		CE8E0B731E07439B00A71916 /* SDL2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2.framework; path = /Library/Frameworks/SDL2.framework; sourceTree = "<group>"; };
+		CE8E0B711E07438400A71916 /* SDL2_mixer.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_mixer.framework; path = external/frameworks/SDL2_mixer.framework; sourceTree = "<group>"; };
+		CE8E0B731E07439B00A71916 /* SDL2.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2.framework; path = external/frameworks/SDL2.framework; sourceTree = "<group>"; };
 		CE8E0B751E07478600A71916 /* GFXHD.PAK */ = {isa = PBXFileReference; lastKnownFileType = file; name = GFXHD.PAK; path = ../../data/GFXHD.PAK; sourceTree = "<group>"; };
 		CE8E0B761E0747A300A71916 /* Spanish.es.po */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = Spanish.es.po; sourceTree = "<group>"; };
 		CE8E0B781E0747DC00A71916 /* 2P - 32x32 - X-Factor.ini */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = "2P - 32x32 - X-Factor.ini"; sourceTree = "<group>"; };
@@ -982,7 +984,7 @@
 		E375D32C2DB00C5D00F459C8 /* SOUND.PAK */ = {isa = PBXFileReference; lastKnownFileType = file; name = SOUND.PAK; path = ../../data/SOUND.PAK; sourceTree = "<group>"; };
 		E375D32D2DB00C5D00F459C8 /* VOC.PAK */ = {isa = PBXFileReference; lastKnownFileType = file; name = VOC.PAK; path = ../../data/VOC.PAK; sourceTree = "<group>"; };
 		E375D32E2DB00C5D00F459C8 /* GFXHD.PAK */ = {isa = PBXFileReference; lastKnownFileType = file; name = GFXHD.PAK; path = ../../data/GFXHD.PAK; sourceTree = "<group>"; };
-		E3D11F8E2DAFFD0600C4A670 /* SDL2_ttf.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_ttf.framework; path = ../../../../../../../Library/Frameworks/SDL2_ttf.framework; sourceTree = "<group>"; };
+		E3D11F8E2DAFFD0600C4A670 /* SDL2_ttf.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SDL2_ttf.framework; path = external/frameworks/SDL2_ttf.framework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1003,7 +1005,6 @@
 		080E96DDFE201D6D7F000001 /* Classes */ = {
 			isa = PBXGroup;
 			children = (
-				1309680010B6E51E00B22CFC /* MacFunctions.h */,
 				1309680110B6E51E00B22CFC /* MacFunctions.m */,
 			);
 			name = Classes;
@@ -1037,6 +1038,7 @@
 				CEEB16B31CD6A04F00CF91D9 /* Colors.h */,
 				1358FB6913D3B71500FAD5B7 /* Command.h */,
 				1358FB6A13D3B71500FAD5B7 /* CommandManager.h */,
+				1358FB6A13D3B71500FAD5C8 /* CursorManager.h */,
 				1358FB6B13D3B71500FAD5B7 /* ConcatIterator.h */,
 				1358FB6C13D3B71500FAD5B7 /* config.h */,
 				1358FB6D13D3B71500FAD5B7 /* CutScenes */,
@@ -1430,6 +1432,7 @@
 				1358FD5C13D3B72E00FAD5B7 /* Choam.cpp */,
 				1358FD5D13D3B72E00FAD5B7 /* Command.cpp */,
 				1358FD5E13D3B72E00FAD5B7 /* CommandManager.cpp */,
+				1358FD5E13D3B72E00FAD5C8 /* CursorManager.cpp */,
 				1358FD5F13D3B72E00FAD5B7 /* CutScenes */,
 				1358FD6D13D3B72E00FAD5B7 /* enet */,
 				1358FD7813D3B72F00FAD5B7 /* Explosion.cpp */,
@@ -2058,6 +2061,7 @@
 				1358FE2213D3B72F00FAD5B7 /* Choam.cpp in Sources */,
 				1358FE2313D3B72F00FAD5B7 /* Command.cpp in Sources */,
 				1358FE2413D3B72F00FAD5B7 /* CommandManager.cpp in Sources */,
+				1358FE2413D3B72F00FAD5C8 /* CursorManager.cpp in Sources */,
 				1358FE2513D3B72F00FAD5B7 /* CrossBlendVideoEvent.cpp in Sources */,
 				1358FE2613D3B72F00FAD5B7 /* CutScene.cpp in Sources */,
 				1358FE2713D3B72F00FAD5B7 /* CutSceneTrigger.cpp in Sources */,
@@ -2283,7 +2287,7 @@
 				ENABLE_TESTABILITY = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(LOCAL_LIBRARY_DIR)/Frameworks",
+					"$(PROJECT_DIR)/external/frameworks",
 					"$(PROJECT_DIR)",
 				);
 				GCC_DYNAMIC_NO_PIC = NO;
@@ -2299,9 +2303,9 @@
 				GCC_VERSION = "";
 				HEADER_SEARCH_PATHS = (
 					../../include,
-					/Library/Frameworks/SDL2_ttf.framework/Versions/A/Headers,
-					/Library/Frameworks/SDL2.framework/Versions/A/Headers,
-					/Library/Frameworks/SDL2_mixer.framework/Versions/A/Headers,
+					../../external/frameworks/SDL2_ttf.framework/Headers,
+					../../external/frameworks/SDL2.framework/Headers,
+					../../external/frameworks/SDL2_mixer.framework/Headers,
 					"$(HEADER_SEARCH_PATHS)",
 				);
 				INFOPLIST_FILE = Info.plist;
@@ -2309,6 +2313,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				LLVM_LTO = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MARKETING_VERSION = 0.98.4;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_CFLAGS = "";
 				OTHER_CPLUSPLUSFLAGS = (
@@ -2323,7 +2328,7 @@
 					"-dylib_file",
 					"@loader_path/Frameworks/smpeg.framework/Versions/A/smpeg:/Library/Frameworks/SDL2_mixer.framework/Versions/A/Frameworks/smpeg.framework/Versions/A/smpeg",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "Dune-Legacy-OSX-0.97.04";
+				PRODUCT_BUNDLE_IDENTIFIER = "Dune-Legacy-OSX-0.98.4";
 				PRODUCT_NAME = "Dune Legacy";
 				SYMROOT = "${SRCROOT}/build";
 				WRAPPER_EXTENSION = app;
@@ -2349,7 +2354,7 @@
 				ENABLE_TESTABILITY = NO;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
-					"$(LOCAL_LIBRARY_DIR)/Frameworks",
+					"$(PROJECT_DIR)/external/frameworks",
 					"$(PROJECT_DIR)",
 				);
 				GCC_ENABLE_FIX_AND_CONTINUE = YES;
@@ -2364,10 +2369,8 @@
 				GCC_VERSION = "";
 				HEADER_SEARCH_PATHS = (
 					../../include,
-					"$(HOME)/Library/Frameworks/SDL2.framework/Headers",
-					/Library/Frameworks/SDL2.framework/Headers,
-					"$(HOME)/Library/Frameworks/SDL2_mixer.framework/Headers",
-					/Library/Frameworks/SDL2_mixer.framework/Headers,
+					../../external/frameworks/SDL2.framework/Headers,
+					../../external/frameworks/SDL2_mixer.framework/Headers,
 					"$(HEADER_SEARCH_PATHS)",
 				);
 				INFOPLIST_FILE = Info.plist;
@@ -2375,6 +2378,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				LLVM_LTO = YES;
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
+				MARKETING_VERSION = 0.98.4;
 				ONLY_ACTIVE_ARCH = NO;
 				OTHER_CFLAGS = (
 					"-ffast-math",
@@ -2394,7 +2398,7 @@
 					"-dylib_file",
 					"@loader_path/Frameworks/smpeg.framework/Versions/A/smpeg:/Library/Frameworks/SDL2_mixer.framework/Versions/A/Frameworks/smpeg.framework/Versions/A/smpeg",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = "Dune-Legacy-OSX-0.97.04";
+				PRODUCT_BUNDLE_IDENTIFIER = "Dune-Legacy-OSX-0.98.4";
 				PRODUCT_NAME = "Dune Legacy";
 				SYMROOT = "${SRCROOT}/build";
 				WRAPPER_EXTENSION = app;
@@ -2408,8 +2412,7 @@
 				DEPLOYMENT_POSTPROCESSING = YES;
 				ENABLE_TESTABILITY = YES;
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/Library/Frameworks",
-					/Library/Frameworks,
+					"$(PROJECT_DIR)/external/frameworks",
 					"$(FRAMEWORK_SEARCH_PATHS)",
 				);
 				GCC_OPTIMIZATION_LEVEL = 3;
@@ -2433,10 +2436,8 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = (
 					../../include,
-					"$(HOME)/Library/Frameworks/SDL2.framework/Headers",
-					/Library/Frameworks/SDL2.framework/Headers,
-					"$(HOME)/Library/Frameworks/SDL2_mixer.framework/Headers",
-					/Library/Frameworks/SDL2_mixer.framework/Headers,
+					../../external/frameworks/SDL2.framework/Headers,
+					../../external/frameworks/SDL2_mixer.framework/Headers,
 					"$(HEADER_SEARCH_PATHS)",
 				);
 				ONLY_ACTIVE_ARCH = YES;
@@ -2459,8 +2460,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEPLOYMENT_POSTPROCESSING = YES;
 				FRAMEWORK_SEARCH_PATHS = (
-					"$(HOME)/Library/Frameworks",
-					/Library/Frameworks,
+					"$(PROJECT_DIR)/external/frameworks",
 					"$(FRAMEWORK_SEARCH_PATHS)",
 					"$(inherited)",
 				);
@@ -2487,9 +2487,9 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				HEADER_SEARCH_PATHS = (
 					../../include,
-					/Library/Frameworks/SDL2_ttf.framework/Versions/A/Headers,
-					/Library/Frameworks/SDL2.framework/Versions/A/Headers,
-					/Library/Frameworks/SDL2_mixer.framework/Versions/A/Headers,
+					../../external/frameworks/SDL2_ttf.framework/Headers,
+					../../external/frameworks/SDL2.framework/Headers,
+					../../external/frameworks/SDL2_mixer.framework/Headers,
 					"$(HEADER_SEARCH_PATHS)",
 				);
 				OTHER_CPLUSPLUSFLAGS = "-mno-fused-madd";

@@ -97,6 +97,9 @@ Game::Game() {
     The destructor frees up all the used memory.
 */
 Game::~Game() {
+    // Clean up cursor manager
+    cursorManager.cleanup();
+
     if(pNetworkManager != nullptr) {
         pNetworkManager->setOnReceiveChatMessage(std::function<void (const std::string&, const std::string&)>());
         pNetworkManager->setOnReceiveCommandList(std::function<void (const std::string&, const CommandList&)>());
@@ -133,6 +136,9 @@ Game::~Game() {
 
 void Game::initGame(const GameInitSettings& newGameInitSettings) {
     gameInitSettings = newGameInitSettings;
+
+    // Initialize cursor manager
+    cursorManager.initialize();
 
     switch(gameInitSettings.getGameType()) {
         case GameType::LoadSavegame: {
@@ -212,7 +218,7 @@ void Game::processObjects()
     }
 
     if ((currentCursorMode == CursorMode_Placing) && selectedList.empty()) {
-        currentCursorMode = CursorMode_Normal;
+        setCursorMode(CursorMode_Normal);
     }
 
     for(UnitBase* pUnit : unitList) {
@@ -234,11 +240,11 @@ void Game::drawScreen()
     Coord TopLeftTile = screenborder->getTopLeftTile();
     Coord BottomRightTile = screenborder->getBottomRightTile();
 
-    // extend the view a little bit to avoid graphical glitches
-    TopLeftTile.x = std::max(0, TopLeftTile.x - 1);
-    TopLeftTile.y = std::max(0, TopLeftTile.y - 1);
-    BottomRightTile.x = std::min(currentGameMap->getSizeX()-1, BottomRightTile.x + 1);
-    BottomRightTile.y = std::min(currentGameMap->getSizeY()-1, BottomRightTile.y + 1);
+    // Add margin to avoid pop-in during scrolling
+    TopLeftTile.x = std::max(0, TopLeftTile.x - 2);
+    TopLeftTile.y = std::max(0, TopLeftTile.y - 2);
+    BottomRightTile.x = std::min(currentGameMap->getSizeX()-1, BottomRightTile.x + 2);
+    BottomRightTile.y = std::min(currentGameMap->getSizeY()-1, BottomRightTile.y + 2);
 
     const auto x1 = TopLeftTile.x;
     const auto y1 = TopLeftTile.y;
@@ -246,7 +252,6 @@ void Game::drawScreen()
     const auto y2 = BottomRightTile.y + 1;
 
     /* draw ground */
-
     currentGameMap->for_each(x1, y1, x2, y2,
         [](Tile& t) {
             t.blitGround(screenborder->world2screenX(t.getLocation().x*TILESIZE),
@@ -542,7 +547,8 @@ void Game::drawScreen()
         pInGameMentat->draw();
     }
 
-    drawCursor();
+    // Update cursor
+    updateCursor();
 }
 
 
@@ -688,7 +694,7 @@ void Game::doInput()
 
                             if(currentCursorMode != CursorMode_Normal) {
                                 //cancel special cursor mode
-                                currentCursorMode = CursorMode_Normal;
+                                setCursorMode(CursorMode_Normal);
                             } else if((!selectedList.empty()
                                             && (((objectManager.getObject(*selectedList.begin()))->getOwner() == pLocalHouse))
                                             && (((objectManager.getObject(*selectedList.begin()))->isRespondable())) ) )
@@ -840,130 +846,19 @@ void Game::doInput()
 }
 
 
-void Game::drawCursor() const
+void Game::updateCursor()
 {
-    if(!(SDL_GetWindowFlags(window) & SDL_WINDOW_MOUSE_FOCUS)) {
-        return;
+    if (cursorManager.isInitialized()) {
+        cursorManager.setCursorMode(currentCursorMode);
     }
+}
 
-    SDL_Texture* pCursor = nullptr;
-    SDL_Rect dest = { 0, 0, 0, 0};
-    if(scrollLeftMode || scrollRightMode || scrollUpMode || scrollDownMode) {
-        if(scrollLeftMode && !scrollRightMode) {
-            pCursor = pGFXManager->getUIGraphic(UI_CursorLeft);
-            dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY-5, HAlign::Left, VAlign::Top);
-        } else if(scrollRightMode && !scrollLeftMode) {
-            pCursor = pGFXManager->getUIGraphic(UI_CursorRight);
-            dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY-5, HAlign::Center, VAlign::Top);
-        }
-
-        if(pCursor == nullptr) {
-            if(scrollUpMode && !scrollDownMode) {
-                pCursor = pGFXManager->getUIGraphic(UI_CursorUp);
-                dest = calcDrawingRect(pCursor, drawnMouseX-5, drawnMouseY, HAlign::Left, VAlign::Top);
-            } else if(scrollDownMode && !scrollUpMode) {
-                pCursor = pGFXManager->getUIGraphic(UI_CursorDown);
-                dest = calcDrawingRect(pCursor, drawnMouseX-5, drawnMouseY, HAlign::Left, VAlign::Center);
-            } else {
-                pCursor = pGFXManager->getUIGraphic(UI_CursorNormal);
-                dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Left, VAlign::Top);
-            }
-        }
-    } else {
-        if( (pInGameMenu != nullptr) || (pInGameMentat != nullptr) || (pWaitingForOtherPlayers != nullptr) || (((drawnMouseX >= sideBarPos.x) || (drawnMouseY < topBarPos.h)) && (isOnRadarView(drawnMouseX, drawnMouseY) == false))) {
-            // Menu mode or Mentat Menu or Waiting for other players or outside of game screen but not inside minimap
-            pCursor = pGFXManager->getUIGraphic(UI_CursorNormal);
-            dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Left, VAlign::Top);
-        } else {
-
-            switch(currentCursorMode) {
-                case CursorMode_Normal:
-                case CursorMode_Placing: {
-                    pCursor = pGFXManager->getUIGraphic(UI_CursorNormal);
-                    dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Left, VAlign::Top);
-                } break;
-
-                case CursorMode_Move: {
-                    switch(currentZoomlevel) {
-                        case 0:     pCursor = pGFXManager->getUIGraphic(UI_CursorMove_Zoomlevel0); break;
-                        case 1:     pCursor = pGFXManager->getUIGraphic(UI_CursorMove_Zoomlevel1); break;
-                        case 2:
-                        default:    pCursor = pGFXManager->getUIGraphic(UI_CursorMove_Zoomlevel2); break;
-                    }
-
-                    dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Center, VAlign::Center);
-                } break;
-
-                case CursorMode_Attack: {
-                    switch(currentZoomlevel) {
-                        case 0:     pCursor = pGFXManager->getUIGraphic(UI_CursorAttack_Zoomlevel0); break;
-                        case 1:     pCursor = pGFXManager->getUIGraphic(UI_CursorAttack_Zoomlevel1); break;
-                        case 2:
-                        default:    pCursor = pGFXManager->getUIGraphic(UI_CursorAttack_Zoomlevel2); break;
-                    }
-
-                    dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Center, VAlign::Center);
-                } break;
-
-                case CursorMode_Capture: {
-                    switch(currentZoomlevel) {
-                        case 0:     pCursor = pGFXManager->getUIGraphic(UI_CursorCapture_Zoomlevel0); break;
-                        case 1:     pCursor = pGFXManager->getUIGraphic(UI_CursorCapture_Zoomlevel1); break;
-                        case 2:
-                        default:    pCursor = pGFXManager->getUIGraphic(UI_CursorCapture_Zoomlevel2); break;
-                    }
-
-                    dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Center, VAlign::Bottom);
-
-                    int xPos = INVALID_POS;
-                    int yPos = INVALID_POS;
-
-                    if(screenborder->isScreenCoordInsideMap(drawnMouseX, drawnMouseY) == true) {
-                        xPos = screenborder->screen2MapX(drawnMouseX);
-                        yPos = screenborder->screen2MapY(drawnMouseY);
-                    } else if(isOnRadarView(drawnMouseX, drawnMouseY)) {
-                        Coord position = pInterface->getRadarView().getWorldCoords(drawnMouseX - (sideBarPos.x + SIDEBAR_COLUMN_WIDTH), drawnMouseY - sideBarPos.y);
-
-                        xPos = position.x / TILESIZE;
-                        yPos = position.y / TILESIZE;
-                    }
-
-                    if((xPos != INVALID_POS) && (yPos != INVALID_POS)) {
-
-                        Tile* pTile = currentGameMap->getTile(xPos, yPos);
-
-                        if(pTile->isExploredByTeam(pLocalHouse->getTeamID())) {
-
-                            StructureBase* pStructure = dynamic_cast<StructureBase*>(pTile->getGroundObject());
-
-                            if((pStructure != nullptr) && (pStructure->canBeCaptured()) && (pStructure->getOwner()->getTeamID() != pLocalHouse->getTeamID())) {
-                                dest.y += ((getGameCycleCount() / 10) % 5);
-                            }
-                        }
-                    }
-
-                } break;
-
-                case CursorMode_CarryallDrop: {
-                    switch(currentZoomlevel) {
-                        case 0:     pCursor = pGFXManager->getUIGraphic(UI_CursorCarryallDrop_Zoomlevel0); break;
-                        case 1:     pCursor = pGFXManager->getUIGraphic(UI_CursorCarryallDrop_Zoomlevel1); break;
-                        case 2:
-                        default:    pCursor = pGFXManager->getUIGraphic(UI_CursorCarryallDrop_Zoomlevel2); break;
-                    }
-
-                    dest = calcDrawingRect(pCursor, drawnMouseX, drawnMouseY, HAlign::Center, VAlign::Bottom);
-                } break;
-
-
-                default: {
-                    THROW(std::runtime_error, "Game::drawCursor(): Unknown cursor mode");
-                };
-            }
-        }
+void Game::setCursorMode(int mode)
+{
+    if (cursorManager.canSetCursorMode(mode, std::vector<Uint32>(selectedList.begin(), selectedList.end()))) {
+        currentCursorMode = mode;
+        cursorManager.setCursorMode(mode);
     }
-
-    SDL_RenderCopy(renderer, pCursor, nullptr, &dest);
 }
 
 void Game::setupView()
@@ -1005,268 +900,265 @@ void Game::setupView()
 
 void Game::runMainLoop() {
     SDL_Log("Starting game...");
+    initializeGameLoop();
 
-    // add interface
+    const int MAX_UPDATES_PER_FRAME = 5;
+    const Uint32 MIN_FRAME_TIME = 1;  // Minimum 1ms between frames to prevent CPU overload
+    
+    Uint32 lastGameCycle = SDL_GetTicks();
+    Uint32 accumulator = 0;
+    bool wasMenuOpen = false;
+    
+    do {
+        const Uint32 frameStart = SDL_GetTicks();
+        const Uint32 frameTime = frameStart - lastGameCycle;
+        lastGameCycle = frameStart;
+        
+        // Check for menu state changes
+        bool isMenuOpen = (pInGameMenu != nullptr) || (pInGameMentat != nullptr) || (pWaitingForOtherPlayers != nullptr);
+        if (isMenuOpen != wasMenuOpen) {
+            accumulator = 0;
+            lastGameCycle = frameStart;
+            wasMenuOpen = isMenuOpen;
+        }
+        
+        if (!isMenuOpen) {
+            accumulator += std::min(frameTime, Uint32(200));  // Cap at 200ms to prevent spiral of death
+        }
+        
+        // Process all input through normal game loop
+        processInput();
+        
+        bool bWaitForNetwork = false;
+        if(pNetworkManager != nullptr) {
+            bWaitForNetwork = handleNetworkUpdates();
+        }
+        
+        if(bReplay && !bPause) {
+            skipToGameCycle = gameCycleCount + (10*1000)/GAMESPEED_DEFAULT;
+        }
+        
+        if(!bPause && !bWaitForNetwork && !bMenu) {
+            if(skipToGameCycle != INVALID_GAMECYCLE) {
+                int updates = 0;
+                while((gameCycleCount < skipToGameCycle) && (updates < MAX_UPDATES_PER_FRAME)) {
+                    processNetwork();
+                    updateGameState();
+                    updates++;
+                }
+                
+                if(gameCycleCount >= skipToGameCycle) {
+                    skipToGameCycle = INVALID_GAMECYCLE;
+                }
+            } else {
+                const float speedFactor = std::pow(5.0f, (float(settings.gameOptions.gameSpeed) - float(GAMESPEED_MAX/2)) / (GAMESPEED_MAX/2));
+                const Uint32 updateInterval = Uint32(GAMESPEED_DEFAULT * speedFactor);
+                int updates = 0;
+                
+                while(accumulator >= updateInterval && updates < MAX_UPDATES_PER_FRAME) {
+                    processNetwork();
+                    updateGameState();
+                    accumulator -= updateInterval;
+                    updates++;
+                }
+            }
+        }
+        
+        renderFrame();
+        
+        const Uint32 totalFrameTime = SDL_GetTicks() - frameStart;
+        if(totalFrameTime < MIN_FRAME_TIME) {
+            SDL_Delay(1);  // Give up timeslice but don't force delay
+        }
+        
+        if(bShowFPS) {
+            averageFrameTime = 0.99f * averageFrameTime + 0.01f * totalFrameTime;
+        }
+        
+        if(finished && (SDL_GetTicks() - finishedLevelTime > END_WAIT_TIME)) {
+            finishedLevel = true;
+        }
+        
+        if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
+            takeScreenshot();
+        }
+        
+        musicPlayer->musicCheck();
+        
+    } while (!bQuitGame && !finishedLevel);
+}
+
+void Game::initializeGameLoop() {
     if(pInterface == nullptr) {
         pInterface = std::make_unique<GameInterface>();
         if(gameState == GameState::Loading) {
-            // when loading a save game we set radar directly
             pInterface->getRadarView().setRadarMode(pLocalHouse->hasRadarOn());
         } else if(pLocalHouse->hasRadarOn()) {
-            // when starting a new game we switch the radar on with an animation if appropriate
             pInterface->getRadarView().switchRadarMode(true);
         }
     }
 
+    // Configure hardware-accelerated rendering with pixel-perfect scaling
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");  // Use nearest-neighbor scaling for pixel-perfect look
+    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");       // Enable render batching for performance
+    // Note: Renderer driver is set in setVideoMode(), no need to override here
+    
+    // Enable hardware acceleration
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    
+    if(screenTexture != nullptr) {
+        SDL_SetTextureScaleMode(screenTexture, SDL_ScaleModeNearest);
+    }
+
     gameState = GameState::Running;
-
-    //setup endlevel conditions
     finishedLevel = false;
-
     bShowTime = winFlags & WINLOSEFLAGS_TIMEOUT;
 
     // Check if a player has lost
     for(int j = 0; j < NUM_HOUSES; j++) {
-        if(house[j] != nullptr) {
-            if(!house[j]->isAlive()) {
-                house[j]->lose(true);
-            }
+        if(house[j] != nullptr && !house[j]->isAlive()) {
+            house[j]->lose(true);
         }
     }
 
+    initializeReplay();
+    initializeNetwork();
+    musicPlayer->changeMusic(MUSIC_PEACE);
+}
+
+void Game::renderFrame() {
+    SDL_SetRenderTarget(renderer, screenTexture);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    
+    drawScreen();
+    
+    // Copy to main screen and present in one step
+    SDL_SetRenderTarget(renderer, nullptr);
+    SDL_RenderCopy(renderer, screenTexture, nullptr, nullptr);
+    SDL_RenderPresent(renderer);
+}
+
+void Game::processInput() {
+    // Process all input through doInput() which handles both menu and game input
+    doInput();
+    
+    // Handle menu state changes after input processing
+    if(pInGameMenu != nullptr) {
+        if(bMenu == false) {
+            pInGameMenu.reset();
+            resumeGame();
+        }
+        return;
+    } else if(pInGameMentat != nullptr) {
+        if(bMenu == false) {
+            pInGameMentat.reset();
+            resumeGame();
+        }
+        return;
+    } else if(pWaitingForOtherPlayers != nullptr) {
+        if(bMenu == false) {
+                    pWaitingForOtherPlayers.reset();
+                }
+        return;
+            }
+
+    // Only update interface and network if no menu is active
+            pInterface->updateObjectInterface();
+
+    if(pNetworkManager != nullptr && bSelectionChanged) {
+                    pNetworkManager->sendSelectedList(selectedList);
+                    bSelectionChanged = false;
+                }
+            }
+
+void Game::processNetwork() {
+    if(pNetworkManager != nullptr) {
+        bool bWaitForNetwork = handleNetworkUpdates();
+        if(bWaitForNetwork) {
+            return;
+        }
+    }
+}
+
+void Game::updateGameState() {
+    if(bPause) {
+        return;
+            }
+
+            cmdManager.update();
+                pInterface->getRadarView().update();
+                cmdManager.executeCommands(gameCycleCount);
+
+    // Update all houses
+    for(int i = 0; i < NUM_HOUSES; i++) {
+        if(house[i] != nullptr) {
+                        house[i]->update();
+                    }
+                }
+
+                screenborder->update();
+                triggerManager.trigger(gameCycleCount);
+                processObjects();
+
+    if((indicatorFrame != NONE_ID) && (--indicatorTimer <= 0)) {
+                    indicatorTimer = indicatorTime;
+        if(++indicatorFrame > 2) {
+                        indicatorFrame = NONE_ID;
+                    }
+                }
+
+                gameCycleCount++;
+    
+    if(finished && (SDL_GetTicks() - finishedLevelTime > END_WAIT_TIME)) {
+        finishedLevel = true;
+    }
+    
+    if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
+        takeScreenshot();
+    }
+    
+    musicPlayer->musicCheck();
+}
+
+void Game::initializeReplay() {
     if(bReplay) {
         cmdManager.setReadOnly(true);
     } else {
         char tmp[FILENAME_MAX];
         fnkdat("replay/auto.rpl", tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT);
         const std::string replayname(tmp);
-
+        
         auto pStream = std::make_unique<OFileStream>();
-
-        if (pStream->open(replayname)) {
+        if(pStream->open(replayname)) {
             pStream->writeString(getLocalPlayerName());
-
             gameInitSettings.save(*pStream);
-
-            // when this game was loaded we have to save the old commands to the replay file first
             cmdManager.save(*pStream);
-
-            // flush stream
             pStream->flush();
-
-            // now all new commands might be added
             cmdManager.setStream(std::move(pStream));
-        }
-        else
-        {
-            // Should we throw instead?
-            // TODO: Report problem to user...?
+        } else {
             quitGame();
         }
     }
+}
 
+void Game::initializeNetwork() {
     if(pNetworkManager != nullptr) {
-        pNetworkManager->setOnReceiveChatMessage(std::bind(&ChatManager::addChatMessage, &(pInterface->getChatManager()), std::placeholders::_1, std::placeholders::_2));
-        pNetworkManager->setOnReceiveCommandList(std::bind(&CommandManager::addCommandList, &cmdManager, std::placeholders::_1, std::placeholders::_2));
-        pNetworkManager->setOnReceiveSelectionList(std::bind(&Game::onReceiveSelectionList, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-        pNetworkManager->setOnPeerDisconnected(std::bind(&Game::onPeerDisconnected, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-
-        cmdManager.setNetworkCycleBuffer( MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5 );
+        pNetworkManager->setOnReceiveChatMessage(
+            std::bind(&ChatManager::addChatMessage, &(pInterface->getChatManager()), 
+            std::placeholders::_1, std::placeholders::_2));
+        pNetworkManager->setOnReceiveCommandList(
+            std::bind(&CommandManager::addCommandList, &cmdManager, 
+            std::placeholders::_1, std::placeholders::_2));
+        pNetworkManager->setOnReceiveSelectionList(
+            std::bind(&Game::onReceiveSelectionList, this, 
+            std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+        pNetworkManager->setOnPeerDisconnected(
+            std::bind(&Game::onPeerDisconnected, this, 
+            std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
+        
+        cmdManager.setNetworkCycleBuffer(MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5);
     }
-
-    // Change music to ingame music
-    musicPlayer->changeMusic(MUSIC_PEACE);
-
-
-    int     frameStart = SDL_GetTicks();
-    int     frameTime = 0;
-    int     numFrames = 0;
-
-    //SDL_Log("Random Seed (GameCycle %d): 0x%0X", GameCycleCount, RandomGen.getSeed());
-
-    //main game loop
-    do {
-        SDL_SetRenderTarget(renderer, screenTexture);
-
-        // clear whole screen
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-
-        drawScreen();
-
-        SDL_RenderPresent(renderer);
-
-        SDL_SetRenderTarget(renderer, nullptr);
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, screenTexture, nullptr, nullptr);
-        SDL_RenderPresent(renderer);
-
-        const int frameEnd = SDL_GetTicks();
-
-        if(frameEnd == frameStart) {
-            SDL_Delay(1);
-        }
-
-        frameTime += frameEnd - frameStart; // find difference to get frametime
-        frameStart = SDL_GetTicks();
-
-        numFrames++;
-
-        if (bShowFPS) {
-            averageFrameTime = 0.99f * averageFrameTime + 0.01f * frameTime;
-        }
-
-        if(settings.video.frameLimit == true) {
-            if(frameTime < 32) {
-                SDL_Delay(32 - frameTime);
-            }
-        }
-
-        if(finished) {
-            // end timer for the ending message
-            if(SDL_GetTicks() - finishedLevelTime > END_WAIT_TIME) {
-                finishedLevel = true;
-            }
-        }
-
-        if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
-            takeScreenshot();
-        }
-
-
-        while( (frameTime > getGameSpeed()) || (!finished && (gameCycleCount < skipToGameCycle)) )  {
-
-            bool bWaitForNetwork = false;
-
-            if(pNetworkManager != nullptr) {
-                pNetworkManager->update();
-
-                // test if we need to wait for data to arrive
-                for(const std::string& playername : pNetworkManager->getConnectedPeers()) {
-                    HumanPlayer* pPlayer = dynamic_cast<HumanPlayer*>(getPlayerByName(playername));
-                    if(pPlayer != nullptr) {
-                        if(pPlayer->nextExpectedCommandsCycle <= gameCycleCount) {
-                            //SDL_Log("Cycle %d: Waiting for player '%s' to send data for cycle %d...", GameCycleCount, pPlayer->getPlayername().c_str(), pPlayer->nextExpectedCommandsCycle);
-                            bWaitForNetwork = true;
-                        }
-                    }
-                }
-
-                if(bWaitForNetwork == true) {
-                    if(startWaitingForOtherPlayersTime == 0) {
-                        // we just started waiting
-                        startWaitingForOtherPlayersTime = SDL_GetTicks();
-                    } else {
-                        if(SDL_GetTicks() - startWaitingForOtherPlayersTime > 1000) {
-                            // we waited for more than one second
-
-                            if(pWaitingForOtherPlayers == nullptr) {
-                                pWaitingForOtherPlayers = std::make_unique<WaitingForOtherPlayers>();
-                                bMenu = true;
-                            }
-                        }
-                    }
-
-                    SDL_Delay(10);
-                } else {
-                    startWaitingForOtherPlayersTime = 0;
-                    pWaitingForOtherPlayers.reset();
-                }
-            }
-
-            doInput();
-            pInterface->updateObjectInterface();
-
-            if(pNetworkManager != nullptr) {
-                if(bSelectionChanged) {
-                    pNetworkManager->sendSelectedList(selectedList);
-
-                    bSelectionChanged = false;
-                }
-            }
-
-            if(pInGameMentat != nullptr) {
-                pInGameMentat->update();
-            }
-
-            if(pWaitingForOtherPlayers != nullptr) {
-                pWaitingForOtherPlayers->update();
-            }
-
-            cmdManager.update();
-
-            if(!bWaitForNetwork && !bPause) {
-                pInterface->getRadarView().update();
-                cmdManager.executeCommands(gameCycleCount);
-
-//              SDL_Log("cycle %d : %d", gameCycleCount, currentGame->randomGen.getSeed());
-
-#ifdef TEST_SYNC
-                // add every gamecycles one test sync command
-                if(bReplay == false) {
-                    cmdManager.addCommand(Command(pLocalPlayer->getPlayerID(), CMD_TEST_SYNC, randomGen.getSeed()));
-                }
-#endif
-
-                for (int i = 0; i < NUM_HOUSES; i++) {
-                    if (house[i] != nullptr) {
-                        house[i]->update();
-                    }
-                }
-
-                screenborder->update();
-
-                triggerManager.trigger(gameCycleCount);
-
-                processObjects();
-
-                if ((indicatorFrame != NONE_ID) && (--indicatorTimer <= 0)) {
-                    indicatorTimer = indicatorTime;
-
-                    if (++indicatorFrame > 2) {
-                        indicatorFrame = NONE_ID;
-                    }
-                }
-
-                gameCycleCount++;
-            }
-
-            if(gameCycleCount <= skipToGameCycle) {
-                frameTime = 0;
-            } else {
-                frameTime -= getGameSpeed();
-            }
-        }
-
-        musicPlayer->musicCheck();  //if song has finished, start playing next one
-    } while (!bQuitGame && !finishedLevel);//not sure if we need this extra bool
-
-
-
-    // Game is finished
-
-    if(bReplay == false && currentGame->won == true) {
-        // save replay
-        char tmp[FILENAME_MAX];
-
-        std::string mapnameBase = getBasename(gameInitSettings.getFilename(), true);
-        fnkdat(std::string("replay/" + mapnameBase + ".rpl").c_str(), tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT);
-        std::string replayname(tmp);
-
-        OFileStream replystream;
-        replystream.open(replayname);
-        replystream.writeString(getLocalPlayerName());
-        gameInitSettings.save(replystream);
-        cmdManager.save(replystream);
-    }
-
-    if(pNetworkManager != nullptr) {
-        pNetworkManager->disconnect();
-    }
-
-    gameState = GameState::Deinitialize;
-    SDL_Log("Game finished!");
 }
 
 
@@ -1984,34 +1876,12 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
 
         case SDLK_c: {
             //set object to capture
-            if(currentCursorMode != CursorMode_Capture) {
-                for(Uint32 objectID : selectedList) {
-                    ObjectBase* pObject = objectManager.getObject(objectID);
-                    if(pObject->isAUnit() && (pObject->getOwner() == pLocalHouse) && pObject->isRespondable() && pObject->canAttack() && pObject->isInfantry()) {
-                        currentCursorMode = CursorMode_Capture;
-                        break;
-                    }
-                }
-            }
+            setCursorMode(CursorMode_Capture);
         } break;
 
         case SDLK_a: {
             //set object to attack
-            if(currentCursorMode != CursorMode_Attack) {
-                for(Uint32 objectID : selectedList) {
-                    ObjectBase* pObject = objectManager.getObject(objectID);
-                    House* pOwner = pObject->getOwner();
-                    if(pObject->isAUnit() && (pOwner == pLocalHouse) && pObject->isRespondable() && pObject->canAttack()) {
-                        currentCursorMode = CursorMode_Attack;
-                        break;
-                    } else if((pObject->getItemID() == Structure_Palace) && ((pOwner->getHouseID() == HOUSE_HARKONNEN) || (pOwner->getHouseID() == HOUSE_SARDAUKAR))) {
-                        if(static_cast<Palace*>(pObject)->isSpecialWeaponReady()) {
-                            currentCursorMode = CursorMode_Attack;
-                            break;
-                        }
-                    }
-                }
-            }
+            setCursorMode(CursorMode_Attack);
         } break;
 
         case SDLK_t: {
@@ -2078,15 +1948,7 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
 
         case SDLK_m: {
             //set object to move
-            if(currentCursorMode != CursorMode_Move) {
-                for(Uint32 objectID : selectedList) {
-                    ObjectBase* pObject = objectManager.getObject(objectID);
-                    if(pObject->isAUnit() && (pObject->getOwner() == pLocalHouse) && pObject->isRespondable()) {
-                        currentCursorMode = CursorMode_Move;
-                        break;
-                    }
-                }
-            }
+            setCursorMode(CursorMode_Move);
         } break;
 
         case SDLK_g: {
@@ -2117,9 +1979,9 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
                     ConstructionYard* pConstructionYard = dynamic_cast<ConstructionYard*>(objectManager.getObject(*selectedList.begin()));
                     if(pConstructionYard != nullptr) {
                         if(currentCursorMode == CursorMode_Placing) {
-                            currentCursorMode = CursorMode_Normal;
+                            setCursorMode(CursorMode_Normal);
                         } else if(pConstructionYard->isWaitingToPlace()) {
-                            currentCursorMode = CursorMode_Placing;
+                            setCursorMode(CursorMode_Placing);
                         }
                     }
                 }
@@ -2161,15 +2023,7 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
 
 
         case SDLK_d: {
-            if(currentCursorMode != CursorMode_CarryallDrop){
-                for(Uint32 objectID : selectedList) {
-                    ObjectBase* pObject = objectManager.getObject(objectID);
-                    if(pObject->isAGroundUnit() && pObject->getOwner()->hasCarryalls()) {
-                        currentCursorMode = CursorMode_CarryallDrop;
-                    }
-                }
-            }
-
+            setCursorMode(CursorMode_CarryallDrop);
         } break;
 
         case SDLK_u: {
@@ -2231,15 +2085,15 @@ bool Game::handlePlacementClick(int xPos, int yPos) {
     int placeItem = pBuilder->getCurrentProducedItem();
     Coord structuresize = getStructureSize(placeItem);
 
-    if(placeItem == Structure_Slab1) {
-        if((currentGameMap->isWithinBuildRange(xPos, yPos, pBuilder->getOwner()))
-            && (currentGameMap->okayToPlaceStructure(xPos, yPos, 1, 1, false, pBuilder->getOwner()))
-            && (currentGameMap->getTile(xPos, yPos)->isConcrete() == false)) {
-            getCommandManager().addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLACE_STRUCTURE,pBuilder->getObjectID(), xPos, yPos));
-            //the user has tried to place and has been successful
-            soundPlayer->playSound(Sound_PlaceStructure);
-            currentCursorMode = CursorMode_Normal;
-            return true;
+            if(placeItem == Structure_Slab1) {
+            if((currentGameMap->isWithinBuildRange(xPos, yPos, pBuilder->getOwner()))
+                && (currentGameMap->okayToPlaceStructure(xPos, yPos, 1, 1, false, pBuilder->getOwner()))
+                && (currentGameMap->getTile(xPos, yPos)->isConcrete() == false)) {
+                getCommandManager().addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLACE_STRUCTURE,pBuilder->getObjectID(), xPos, yPos));
+                //the user has tried to place and has been successful
+                soundPlayer->playSound(Sound_PlaceStructure);
+                setCursorMode(CursorMode_Normal);
+                return true;
         } else {
             //the user has tried to place but clicked on impossible point
             currentGame->addToNewsTicker(_("@DUNE.ENG|135#Cannot place slab here."));
@@ -2259,7 +2113,7 @@ bool Game::handlePlacementClick(int xPos, int yPos) {
             getCommandManager().addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLACE_STRUCTURE,pBuilder->getObjectID(), xPos, yPos));
             //the user has tried to place and has been successful
             soundPlayer->playSound(Sound_PlaceStructure);
-            currentCursorMode = CursorMode_Normal;
+            setCursorMode(CursorMode_Normal);
             return true;
         } else {
             //the user has tried to place but clicked on impossible point
@@ -2272,7 +2126,7 @@ bool Game::handlePlacementClick(int xPos, int yPos) {
             getCommandManager().addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLACE_STRUCTURE,pBuilder->getObjectID(), xPos, yPos));
             //the user has tried to place and has been successful
             soundPlayer->playSound(Sound_PlaceStructure);
-            currentCursorMode = CursorMode_Normal;
+            setCursorMode(CursorMode_Normal);
             return true;
         } else {
             //the user has tried to place but clicked on impossible point
@@ -2331,7 +2185,7 @@ bool Game::handleSelectedObjectsAttackClick(int xPos, int yPos) {
         }
     }
 
-    currentCursorMode = CursorMode_Normal;
+    setCursorMode(CursorMode_Normal);
     if(pResponder) {
         pResponder->playConfirmSound();
         return true;
@@ -2351,7 +2205,7 @@ bool Game::handleSelectedObjectsMoveClick(int xPos, int yPos) {
         }
     }
 
-    currentCursorMode = CursorMode_Normal;
+    setCursorMode(CursorMode_Normal);
     if(pResponder) {
         pResponder->playConfirmSound();
         return true;
@@ -2371,7 +2225,7 @@ bool Game::handleSelectedObjectsRequestCarryallDropClick(int xPos, int yPos) {
         If manual carryall mode isn't enabled then turn this off...
     */
     if(!getGameInitSettings().getGameOptions().manualCarryallDrops) {
-        currentCursorMode = CursorMode_Normal;
+        setCursorMode(CursorMode_Normal);
         return false;
     }
 
@@ -2383,7 +2237,7 @@ bool Game::handleSelectedObjectsRequestCarryallDropClick(int xPos, int yPos) {
         }
     }
 
-    currentCursorMode = CursorMode_Normal;
+    setCursorMode(CursorMode_Normal);
     if(pResponder) {
         pResponder->playConfirmSound();
         return true;
@@ -2413,7 +2267,7 @@ bool Game::handleSelectedObjectsCaptureClick(int xPos, int yPos) {
             }
         }
 
-        currentCursorMode = CursorMode_Normal;
+        setCursorMode(CursorMode_Normal);
         if(pResponder) {
             pResponder->playConfirmSound();
             return true;
@@ -2517,4 +2371,39 @@ int Game::getGameSpeed() const {
     } else {
         return settings.gameOptions.gameSpeed;
     }
+}
+
+bool Game::handleNetworkUpdates() {
+    if(pNetworkManager == nullptr) {
+        return false;
+    }
+    
+    pNetworkManager->update();
+    bool bWaitForNetwork = false;
+    
+    // Check for network delays
+    for(const std::string& playername : pNetworkManager->getConnectedPeers()) {
+        HumanPlayer* pPlayer = dynamic_cast<HumanPlayer*>(getPlayerByName(playername));
+        if(pPlayer != nullptr && pPlayer->nextExpectedCommandsCycle <= gameCycleCount) {
+            bWaitForNetwork = true;
+            break;
+        }
+    }
+    
+    if(bWaitForNetwork) {
+        if(startWaitingForOtherPlayersTime == 0) {
+            startWaitingForOtherPlayersTime = SDL_GetTicks();
+        } else if(SDL_GetTicks() - startWaitingForOtherPlayersTime > 1000) {
+            if(pWaitingForOtherPlayers == nullptr) {
+                pWaitingForOtherPlayers = std::make_unique<WaitingForOtherPlayers>();
+                bMenu = true;
+            }
+        }
+        SDL_Delay(10);
+    } else {
+        startWaitingForOtherPlayersTime = 0;
+        pWaitingForOtherPlayers.reset();
+    }
+    
+    return bWaitForNetwork;
 }

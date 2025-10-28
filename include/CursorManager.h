@@ -15,24 +15,30 @@
  *  along with Dune Legacy.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef VERSION
-    #define VERSION "0.98.4"
-#endif
+#ifndef CURSORMANAGER_H
+#define CURSORMANAGER_H
 
-#ifndef PACKAGE
-    #define PACKAGE "dunelegacy"
-#endif
+#include <SDL.h>
+#include <vector>
 
-#define VERSIONSTRING   PACKAGE VERSION
+class CursorManager {
+private:
+    SDL_Cursor* normalCursor;
+    SDL_Cursor* moveCursor;
+    SDL_Cursor* attackCursor;
+    SDL_Cursor* captureCursor;
+    SDL_Cursor* carryallDropCursor;
+    bool initialized;
+    
+public:
+    CursorManager();
+    ~CursorManager();
+    
+    void initialize();
+    void cleanup();
+    void setCursorMode(int mode);
+    bool canSetCursorMode(int mode, const std::vector<Uint32>& selectedObjects);
+    bool isInitialized() const { return initialized; }
+};
 
-#ifndef DUNELEGACY_DATADIR
-    #define DUNELEGACY_DATADIR "."
-#endif
-
-#ifndef CONFIGFILENAME
-    #define CONFIGFILENAME "Dune Legacy.ini"
-#endif
-
-#ifndef LOGFILENAME
-    #define LOGFILENAME "Dune Legacy.log"
-#endif
+#endif // CURSORMANAGER_H
