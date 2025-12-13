@@ -298,7 +298,6 @@ target_sources(dunelegacy
         Trigger/TimeoutTrigger.cpp
 
         # misc
-        misc/DiscordManager.cpp
         misc/draw_util.cpp
         misc/FileSystem.cpp
         misc/fnkdat.cpp
@@ -378,13 +377,11 @@ find_library(DISCORD_RPC_LIBRARY discord-rpc PATHS ${CMAKE_PREFIX_PATH}/lib)
 # vcpkg provides modern CMake targets for SDL2
 target_link_libraries(dunelegacy
     PRIVATE
-        $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
-        $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-        $<IF:$<TARGET_EXISTS:SDL2_mixer::SDL2_mixer>,SDL2_mixer::SDL2_mixer,SDL2_mixer::SDL2_mixer-static>
-        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
+        ${SDL2_LIBRARIES}
+        ${SDL2_MIXER_LIBRARIES}
+        ${SDL2_TTF_LIBRARIES}
         CURL::libcurl
-        miniupnpc::miniupnpc
-        ${DISCORD_RPC_LIBRARY}
+        ${MINIUPNPC_LIBRARY}
 )
 
 if(WIN32)
