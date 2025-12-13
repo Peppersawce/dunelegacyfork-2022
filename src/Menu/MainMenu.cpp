@@ -28,7 +28,11 @@
 #include <Menu/SinglePlayerMenu.h>
 #include <Menu/MultiPlayerMenu.h>
 #include <Menu/OptionsMenu.h>
+#include <Menu/ModMenu.h>
 #include <Menu/AboutMenu.h>
+
+#include <GUI/QstBox.h>
+#include <config.h>
 
 MainMenu::MainMenu()
 {
@@ -60,7 +64,7 @@ MainMenu::MainMenu()
     windowWidget.addWidget(&buttonBorder, dest3);
 
     // set up menu buttons
-    windowWidget.addWidget(&MenuButtons,Point((getRendererWidth() - 160)/2,getRendererHeight()/2 + 64),Point(160,111));
+    windowWidget.addWidget(&MenuButtons,Point((getRendererWidth() - 160)/2,getRendererHeight()/2 + 64),Point(160,128));
 
     singlePlayerButton.setText(_("SINGLE PLAYER"));
     singlePlayerButton.setOnClick(std::bind(&MainMenu::onSinglePlayer, this));
@@ -79,6 +83,12 @@ MainMenu::MainMenu()
     mapEditorButton.setText(_("MAP EDITOR"));
     mapEditorButton.setOnClick(std::bind(&MainMenu::onMapEditor, this));
     MenuButtons.addWidget(&mapEditorButton);
+
+    MenuButtons.addWidget(VSpacer::create(3));
+
+    modsButton.setText(_("MODS"));
+    modsButton.setOnClick(std::bind(&MainMenu::onMods, this));
+    MenuButtons.addWidget(&modsButton);
 
     MenuButtons.addWidget(VSpacer::create(3));
 
@@ -105,7 +115,58 @@ int MainMenu::showMenu()
 {
     musicPlayer->changeMusic(MUSIC_MENU);
 
+    // Start version check in background (only once)
+    if(!bVersionCheckStarted) {
+        bVersionCheckStarted = true;
+
+        pVersionChecker = std::make_unique<VersionChecker>(settings.network.metaServer);
+        pVersionChecker->setOnVersionCheckComplete([this](const VersionInfo& info) {
+            if(info.updateAvailable && !bUpdateDialogShown) {
+                latestVersion = info.latestVersion;
+                downloadURL = info.downloadURL;
+                // Show dialog in update() when safe (not during callback)
+            }
+        });
+        pVersionChecker->checkForUpdates();
+    }
+
     return MenuBase::showMenu();
+}
+
+void MainMenu::update()
+{
+    // Process version check results
+    if(pVersionChecker) {
+        pVersionChecker->update();
+    }
+
+    // Show update dialog if new version available and not already shown
+    if(!latestVersion.empty() && !bUpdateDialogShown && !pChildWindow) {
+        bUpdateDialogShown = true;
+
+        std::string message = _("A new version of Dune Legacy is available!");
+        message += "\n\n";
+        message += _("Current: ");
+        message += VERSION;
+        message += "\n";
+        message += _("Latest: ");
+        message += latestVersion;
+        message += "\n\n";
+        message += _("Would you like to visit the download page?");
+
+        openWindow(QstBox::create(message, _("Download"), _("Later"), QSTBOX_BUTTON1));
+    }
+}
+
+void MainMenu::onChildWindowClose(Window* pChildWindow)
+{
+    QstBox* pQstBox = dynamic_cast<QstBox*>(pChildWindow);
+    if(pQstBox != nullptr && pQstBox->getPressedButtonID() == QSTBOX_BUTTON1) {
+        // User clicked "Download" - open the download URL
+        if(!downloadURL.empty()) {
+            SDL_OpenURL(downloadURL.c_str());
+        }
+    }
 }
 
 void MainMenu::onSinglePlayer() const
@@ -126,6 +187,11 @@ void MainMenu::onMapEditor() const
     mapEditor.RunEditor();
 }
 
+void MainMenu::onMods() const
+{
+    ModMenu modMenu;
+    modMenu.showMenu();
+}
 
 void MainMenu::onOptions() {
     OptionsMenu  optionsMenu;

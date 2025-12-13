@@ -30,6 +30,7 @@
 #include <structures/Refinery.h>
 #include <structures/ConstructionYard.h>
 #include <units/Harvester.h>
+#include <units/GroundUnit.h>
 
 Carryall::Carryall(House* newOwner) : AirUnit(newOwner)
 {
@@ -121,6 +122,28 @@ bool Carryall::update() {
         if(aDropOfferer && droppedOffCargo && (hasCargo() == false)
             && ((getRealX() < -TILESIZE) || (getRealX() > (currentGameMap->getSizeX()+1)*TILESIZE)
                 || (getRealY() < -TILESIZE) || (getRealY() > (currentGameMap->getSizeY()+1)*TILESIZE))) {
+            
+            // CRITICAL: Clear any bookings BEFORE leaving map
+            // Harvesters may have booked this delivery carryall while it was flying away
+            if(target.getObjPointer() != nullptr && target.getObjPointer()->getItemID() == Structure_Refinery) {
+                static_cast<Refinery*>(target.getObjPointer())->unBook();
+            }
+            if(targetFriendly && target.getObjPointer() && target.getObjPointer()->isAGroundUnit()) {
+                GroundUnit* ground = static_cast<GroundUnit*>(target.getObjPointer());
+                if(ground->getCarrier() == this) {
+                    ground->bookCarrier(nullptr);
+                }
+            }
+            // Also scan for any unit that may have booked us
+            for(UnitBase* pUnit : unitList) {
+                if(pUnit->isAGroundUnit()) {
+                    GroundUnit* ground = static_cast<GroundUnit*>(pUnit);
+                    if(ground->getCarrier() == this) {
+                        ground->bookCarrier(nullptr);
+                    }
+                }
+            }
+            
             setVisible(VIS_ALL, false);
             destroy();
             return false;
@@ -281,11 +304,33 @@ void Carryall::deployUnit(Uint32 unitID)
 
 void Carryall::destroy()
 {
-    // destroy cargo
+    // Clean up bookings to prevent stranded units/refineries
+    if(target.getObjPointer() != nullptr && target.getObjPointer()->getItemID() == Structure_Refinery) {
+        static_cast<Refinery*>(target.getObjPointer())->unBook();
+    }
+    if(targetFriendly && target.getObjPointer() && target.getObjPointer()->isAGroundUnit()) {
+        GroundUnit* ground = static_cast<GroundUnit*>(target.getObjPointer());
+        if(ground->getCarrier() == this) {
+            ground->bookCarrier(nullptr);
+        }
+    }
+
+    // destroy cargo (unless immortal)
+    GameType gameType = currentGame->getGameInitSettings().getGameType();
+    bool immortalityEnabled = (gameType != GameType::CustomMultiplayer 
+                              && gameType != GameType::LoadMultiplayer
+                              && currentGame->getGameInitSettings().getGameOptions().immortalHumanPlayer);
+    
     for(const Uint32& pickedUpUnitID : pickedUpUnitList) {
         UnitBase* pPickedUpUnit = static_cast<UnitBase*>(currentGame->getObjectManager().getObject(pickedUpUnitID));
         if(pPickedUpUnit != nullptr) {
-            pPickedUpUnit->destroy();
+            bool cargoIsImmortal = immortalityEnabled && (pPickedUpUnit->getOwner() == pLocalHouse);
+            if(!cargoIsImmortal) {
+                pPickedUpUnit->destroy();
+            } else {
+                // Drop immortal unit at carryall's location instead of destroying it
+                pPickedUpUnit->deploy(location);
+            }
         }
     }
     pickedUpUnitList.clear();
@@ -336,7 +381,12 @@ void Carryall::engageTarget()
     Coord targetLocation;
     if(target.getObjPointer()->getItemID() == Structure_Refinery) {
         targetLocation = target.getObjPointer()->getLocation() + Coord(2,0);
+    } else if(target.getObjPointer()->isAUnit()) {
+        // For units (like harvesters), use their exact location, not getClosestPoint
+        // getClosestPoint recalculates every frame causing circular flight patterns
+        targetLocation = target.getObjPointer()->getLocation();
     } else {
+        // For multi-tile structures, use closest point
         targetLocation = target.getObjPointer()->getClosestPoint(location);
     }
 
@@ -345,7 +395,40 @@ void Carryall::engageTarget()
 
     targetDistance = distanceFrom(realLocation, realDestination);
 
-    if (targetDistance <= TILESIZE/32) {
+    // SNAP: When close to target, directly adjust position toward it
+    // This bypasses orientation-based movement and prevents circling
+    // Similar to Dynasty's Script_Unit_MoveToTarget approach
+    static const FixPoint SNAP_RANGE = 2 * TILESIZE;  // Start snapping within 2 tiles
+    static const FixPoint SNAP_SPEED = 16;            // Max pixels per update
+    
+    if (targetDistance < SNAP_RANGE && targetDistance > TILESIZE/10) {
+        // Direct position adjustment toward target
+        FixPoint dx = realDestination.x - realX;
+        FixPoint dy = realDestination.y - realY;
+        
+        // Clamp movement to max SNAP_SPEED pixels in each direction
+        dx = std::max(-SNAP_SPEED, std::min(SNAP_SPEED, dx));
+        dy = std::max(-SNAP_SPEED, std::min(SNAP_SPEED, dy));
+        
+        realX += dx;
+        realY += dy;
+        
+        // Update location if we crossed a tile boundary
+        Coord newLocation = Coord(lround(realX)/TILESIZE, lround(realY)/TILESIZE);
+        if(newLocation != location) {
+            unassignFromMap(location);
+            assignToMap(newLocation);
+            location = newLocation;
+        }
+        
+        // Recalculate distance after snap
+        realLocation = Coord(lround(realX), lround(realY));
+        targetDistance = distanceFrom(realLocation, realDestination);
+    }
+
+    // Increased pickup radius from TILESIZE/32 to TILESIZE/10 to match Dynasty's 1/16th tile (6.4% vs 6.25%)
+    // Original: TILESIZE/32 = 3.125% was too strict, Dynasty uses ~6.25%
+    if (targetDistance <= TILESIZE/10) {
         if(hasCargo()) {
             if(target.getObjPointer()->isAStructure()) {
                 while(pickedUpUnitList.begin() != pickedUpUnitList.end()) {
@@ -390,13 +473,23 @@ void Carryall::pickupTarget()
 
         if(pTarget->getHealth() <= 0) {
             // unit died just in the moment we tried to pick it up => carryall also crushes
-            setHealth(0);
+            // Check if carryall itself is immortal
+            GameType gameType = currentGame->getGameInitSettings().getGameType();
+            bool isImmortal = (gameType != GameType::CustomMultiplayer 
+                              && gameType != GameType::LoadMultiplayer
+                              && currentGame->getGameInitSettings().getGameOptions().immortalHumanPlayer
+                              && getOwner() == pLocalHouse);
+            
+            if(!isImmortal) {
+                setHealth(0);
+            }
             return;
         }
 
         if (  pGroundUnitTarget->hasATarget()
             || ( pGroundUnitTarget->getDestination() != pGroundUnitTarget->getLocation())
-            || pGroundUnitTarget->isBadlyDamaged()) {
+            || pGroundUnitTarget->isBadlyDamaged()
+            || pGroundUnitTarget->isAwaitingPickup()) {
 
             if(pGroundUnitTarget->isBadlyDamaged() || (pGroundUnitTarget->hasATarget() == false && pGroundUnitTarget->getItemID() != Unit_Harvester))   {
                 pGroundUnitTarget->doRepair();

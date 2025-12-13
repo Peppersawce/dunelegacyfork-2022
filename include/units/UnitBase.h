@@ -23,6 +23,7 @@
 #include <House.h>
 
 #include <list>
+#include <cstdint>
 
 // forward declarations
 class Tile;
@@ -30,6 +31,11 @@ class Tile;
 class UnitBase : public ObjectBase
 {
 public:
+    enum class TargetRequestKind : uint8_t {
+        None,
+        Refresh,
+        Acquire
+    };
     explicit UnitBase(House* newOwner);
     explicit UnitBase(InputStream& stream);
     void init();
@@ -215,12 +221,26 @@ public:
 
     virtual FixPoint getMaxSpeed() const;
 
+    void resolvePendingTargetRequest();
+    
+    struct PathRequestStats {
+        bool pathFound = false;
+        bool invalidDestination = false;
+        size_t nodesExpanded = 0;
+    };
+    PathRequestStats resolvePendingPathRequest();
+
     inline void clearPath() {
         pathList.clear();
         nextSpotFound = false;
         recalculatePathTimer = 0;
         nextSpotAngle = INVALID;
         noCloserPointCount = 0;
+        pathRequestQueued = false;
+        noProgressCount = 0;
+        lastDistanceToDestination = -1;
+        cachedPathDestination.invalidate();
+        cachedPathRevision = 0;
     }
 
     inline bool isTracked() const { return tracked; }
@@ -261,6 +281,8 @@ protected:
     virtual void setSpeeds();
 
     virtual void targeting();
+    void enqueueTargetRequest(TargetRequestKind kind);
+    void enqueuePathRequest();
 
     virtual void turn();
     void turnLeft();
@@ -268,7 +290,10 @@ protected:
 
     void quitDeviation();
 
-    bool SearchPathWithAStar();
+    bool SearchPathWithAStar(size_t& nodesExpanded, bool& invalidDestination);
+    bool isCachedPathStillValid();
+    void updateCachedPathMetadata(const Coord& destinationCoord);
+    Coord resolvePathDestination() const;
 
     void drawSmoke(int x, int y) const;
 
@@ -304,6 +329,15 @@ protected:
     Sint32   recalculatePathTimer;   ///< This timer is for recalculating the best path after x ticks
     Coord    nextSpot;               ///< The next spot to move to
     std::list<Coord> pathList;       ///< The path to the destination found so far
+    TargetRequestKind pendingTargetRequest = TargetRequestKind::None;
+    bool pathRequestQueued = false;
+    Coord    cachedPathDestination = Coord::Invalid(); ///< Destination associated with the current cached path
+    Uint32   cachedPathRevision = 0;                   ///< Map revision used to validate the cached path
+    
+    // Stuck detection (transient - not saved)
+    FixPoint lastDistanceToDestination = -1;  ///< Distance to destination on last pathfinding attempt
+    Uint8    noProgressCount = 0;             ///< Attempts without getting closer
+    Sint32   carryallRequestCooldown = 0;     ///< Cooldown timer to prevent spam requests
 
     Sint32  findTargetTimer;         ///< When to look for the next target?
     Sint32  primaryWeaponTimer;      ///< When can the primary weapon shot again?

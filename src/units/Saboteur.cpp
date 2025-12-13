@@ -89,32 +89,38 @@ void Saboteur::checkPos()
 }
 
 bool Saboteur::update() {
-    if(active) {
+    if(active && target.getObjPointer() != nullptr) {
+        Coord closestPoint = target.getObjPointer()->getClosestPoint(location);
+        FixPoint dist = blockDistance(location, closestPoint);
+        
+        // Log saboteur state every 50 cycles when close to target
+        static int logCounter = 0;
+        if(dist <= 3.0_fix && (++logCounter % 50) == 0) {
+            SDL_Log("SABOTEUR at (%d,%d): moving=%d target=%d dist=%.2f attackMode=%d destination=(%d,%d)", 
+                location.x, location.y, moving, target.getObjPointer()->getItemID(), 
+                dist.toDouble(), attackMode, destination.x, destination.y);
+        }
+        
         if(!moving) {
             //check to see if close enough to blow up target
-            if(target.getObjPointer() != nullptr){ //&& target.getObjPointer()->isAStructure()
-                if(getOwner()->getTeamID() != target.getObjPointer()->getOwner()->getTeamID())
-                {
-                    Coord   closestPoint;
-                    closestPoint = target.getObjPointer()->getClosestPoint(location);
-
-
-                    if(blockDistance(location, closestPoint) <= 1.5_fix) {
-                        if(isVisible(getOwner()->getTeamID())) {
-                            screenborder->shakeScreen(18);
-                        }
-
-                        ObjectBase* pObject = target.getObjPointer();
-                        destroy();
-                        pObject->setHealth(0);
-                        pObject->destroy();
-                        return false;
+            if(getOwner()->getTeamID() != target.getObjPointer()->getOwner()->getTeamID()) {
+                if(blockDistance(location, closestPoint) <= 1.5_fix) {
+                    SDL_Log("SABOTEUR DETONATING! dist=%.2f", dist.toDouble());
+                    
+                    if(isVisible(getOwner()->getTeamID())) {
+                        screenborder->shakeScreen(18);
                     }
+
+                    ObjectBase* pObject = target.getObjPointer();
+                    destroy();
+                    pObject->setHealth(0);
+                    pObject->destroy();
+                    return false;
                 }
             }
         }
     }
-
+    
     return InfantryBase::update();
 }
 

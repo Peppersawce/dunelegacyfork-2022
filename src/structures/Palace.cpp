@@ -139,8 +139,16 @@ void Palace::doLaunchDeathhand(int x, int y) {
         return;
     }
 
+    // Dynasty scatter algorithm: biased towards smaller scatter values
+    // Get random 0-255, then repeatedly halve until <= 160
+    int scatterDistance = currentGame->randomGen.rand(0, 255);
+    while (scatterDistance > 160) {
+        scatterDistance /= 2;
+    }
+    // Convert to pixels (160 Dynasty units = 10 tiles = 320 pixels)
+    int radius = scatterDistance * 2;
+    
     FixPoint randAngle = 2 * FixPt_PI * currentGame->randomGen.randFixPoint();
-    int radius = currentGame->randomGen.rand(0,10*TILESIZE);
     int deathOffX = lround(FixPoint::sin(randAngle) * radius);
     int deathOffY = lround(FixPoint::cos(randAngle) * radius);
 
@@ -259,7 +267,9 @@ bool Palace::spawnSaboteur() {
     saboteur->deploy(spot);
 
     if(getOwner()->isAI()) {
+        SDL_Log("PALACE: Spawning AI saboteur at (%d,%d), setting to HUNT mode", spot.x, spot.y);
         saboteur->doSetAttackMode(HUNT);
+        SDL_Log("PALACE: Saboteur attack mode after setting: %d", saboteur->getAttackMode());
         currentGame->addToNewsTicker(_("@DUNE.ENG|79#Saboteur is approaching"));
         soundPlayer->playVoice(SaboteurApproaching, pLocalHouse->getHouseID());
     }

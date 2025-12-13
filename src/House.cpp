@@ -38,6 +38,9 @@
 #include <structures/Refinery.h>
 #include <structures/ConstructionYard.h>
 #include <units/Carryall.h>
+
+#include <limits>
+#include <vector>
 #include <units/Harvester.h>
 
 #include <misc/exceptions.h>
@@ -46,7 +49,7 @@
 #include <algorithm>
 
 
-House::House(int newHouse, int newCredits, int maxUnits, Uint8 teamID, int quota) : choam(this) {
+House::House(int newHouse, int newCredits, int maxUnits, int maxHarvesters, Uint8 teamID, int quota) : choam(this) {
     House::init();
 
     houseID = ((newHouse >= 0) && (newHouse < NUM_HOUSES)) ? newHouse :  0;
@@ -57,10 +60,13 @@ House::House(int newHouse, int newCredits, int maxUnits, Uint8 teamID, int quota
     oldCredits = lround(storedCredits+startingCredits);
 
     this->maxUnits = maxUnits;
+    this->maxHarvesters = maxHarvesters;
     this->quota = quota;
 
     bHadContactWithEnemy = false;
     bHadDirectContactWithEnemy = false;
+    isAIActive = false;
+    doneFullScaleAttack = false;
 
     unitBuiltValue = 0;
     structureBuiltValue = 0;
@@ -90,9 +96,20 @@ House::House(InputStream& stream) : choam(this) {
     startingCredits = stream.readFixPoint();
     oldCredits = lround(storedCredits+startingCredits);
     maxUnits = stream.readSint32();
+    maxHarvesters = stream.readSint32();
     quota = stream.readSint32();
 
-    stream.readBools(&bHadContactWithEnemy, &bHadDirectContactWithEnemy);
+    // Backward compatibility: Old saves (< 9803) only have 2 bools, new saves have 4
+    // NOTE: Requires currentGame to be set (it is during load)
+    if (currentGame && currentGame->getLoadedSavegameVersion() < 9803) {
+        // Old save: only read original 2 flags, default new AI flags to false
+        stream.readBools(&bHadContactWithEnemy, &bHadDirectContactWithEnemy);
+        isAIActive = false;
+        doneFullScaleAttack = false;
+    } else {
+        // New save: read all 4 flags
+        stream.readBools(&bHadContactWithEnemy, &bHadDirectContactWithEnemy, &isAIActive, &doneFullScaleAttack);
+    }
 
     unitBuiltValue = stream.readUint32();
     structureBuiltValue = stream.readUint32();
@@ -165,9 +182,10 @@ void House::save(OutputStream& stream) const {
     stream.writeFixPoint(storedCredits);
     stream.writeFixPoint(startingCredits);
     stream.writeSint32(maxUnits);
+    stream.writeSint32(maxHarvesters);
     stream.writeSint32(quota);
 
-    stream.writeBools(bHadContactWithEnemy, bHadDirectContactWithEnemy);
+    stream.writeBools(bHadContactWithEnemy, bHadDirectContactWithEnemy, isAIActive, doneFullScaleAttack);
 
     stream.writeUint32(unitBuiltValue);
     stream.writeUint32(structureBuiltValue);
@@ -326,7 +344,7 @@ void House::update() {
     numVisibleFriendlyUnits = 0;
 
     if (oldCredits != getCredits()) {
-        if((this == pLocalHouse) && (getCredits() > 0)) {
+        if((this == pLocalHouse) && (getCredits() > 0) && settings.audio.playCreditsSFX) {
             soundPlayer->playSound(Sound_CreditsTick);
         }
         oldCredits = getCredits();
@@ -606,6 +624,11 @@ void House::lose(bool bSilent) {
 
 
 void House::freeHarvester(int xPos, int yPos) {
+    // Don't spawn free harvester if at harvester limit
+    if(isHarvesterLimitReached()) {
+        return;
+    }
+
     if(currentGameMap->tileExists(xPos, yPos)
         && currentGameMap->getTile(xPos, yPos)->hasAGroundObject()
         && (currentGameMap->getTile(xPos, yPos)->getGroundObject()->getItemID() == Structure_Refinery))
@@ -843,20 +866,53 @@ UnitBase* House::placeUnit(int itemID, int xPos, int yPos, bool byScenario) {
     \return the coordinate of the center in tile coordinates
 */
 Coord House::getCenterOfMainBase() const {
-    Coord center;
-    int numStructures = 0;
+    struct StructureCenter {
+        const StructureBase* structure;
+        Coord centerPx;
+    };
+
+    std::vector<StructureCenter> ownedStructures;
+    ownedStructures.reserve(structureList.size());
+
+    long long sumX = 0;
+    long long sumY = 0;
+
     for(const StructureBase* pStructure : structureList) {
-        if(pStructure->getOwner() == this) {
-            center += pStructure->getLocation();
-            numStructures++;
+        if(pStructure->getOwner() != this) {
+            continue;
+        }
+
+        Coord centerPx = pStructure->getCenterPoint();
+        ownedStructures.push_back({pStructure, centerPx});
+        sumX += centerPx.x;
+        sumY += centerPx.y;
+    }
+
+    if(ownedStructures.empty()) {
+        return Coord::Invalid();
+    }
+
+    const double avgX = static_cast<double>(sumX) / ownedStructures.size();
+    const double avgY = static_cast<double>(sumY) / ownedStructures.size();
+
+    const StructureCenter* best = &ownedStructures.front();
+    double bestDistSq = std::numeric_limits<double>::max();
+
+    for(const auto& entry : ownedStructures) {
+        const double dx = static_cast<double>(entry.centerPx.x) - avgX;
+        const double dy = static_cast<double>(entry.centerPx.y) - avgY;
+        const double distSq = dx*dx + dy*dy;
+
+        if(distSq < bestDistSq) {
+            bestDistSq = distSq;
+            best = &entry;
         }
     }
 
-    if(numStructures == 0) {
-        return Coord::Invalid();
-    } else {
-        return center / numStructures;
-    }
+    const Coord structureLocation = best->structure->getLocation();
+    const Coord structureSize = best->structure->getStructureSize();
+
+    return structureLocation + Coord(structureSize.x / 2, structureSize.y / 2);
 }
 
 

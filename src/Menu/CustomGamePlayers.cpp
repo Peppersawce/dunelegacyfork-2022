@@ -17,6 +17,8 @@
 
 #include <Menu/CustomGamePlayers.h>
 
+#include <config.h>
+
 #include <FileClasses/GFXManager.h>
 #include <FileClasses/TextManager.h>
 #include <FileClasses/INIFile.h>
@@ -29,6 +31,8 @@
 #include <GUI/dune/DuneStyle.h>
 
 #include <players/PlayerFactory.h>
+#include <players/QuantBotConfig.h>
+#include <mod/ModManager.h>
 
 #include <misc/fnkdat.h>
 #include <misc/FileSystem.h>
@@ -48,7 +52,7 @@
 
 
 CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings, bool server, bool LANServer)
- : MenuBase(), gameInitSettings(newGameInitSettings), bServer(server), bLANServer(LANServer), startGameTime(0), brainEqHumanSlot(-1) {
+ : MenuBase(), gameInitSettings(newGameInitSettings), bServer(server), bLANServer(LANServer), startGameTime(0), bConfigMismatchDetected(false), bModDownloadInProgress(false), bWaitingForModAcks(false), brainEqHumanSlot(-1) {
 
     // set up window
     SDL_Texture *pBackground = pGFXManager->getUIGraphic(UI_MenuBackground);
@@ -140,6 +144,10 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
     mapPropertyValuesVBox.addWidget(&mapPropertyAuthors);
     mapPropertyNamesVBox.addWidget(Label::create(_("License") + ":"));
     mapPropertyValuesVBox.addWidget(&mapPropertyLicense);
+    mapPropertyNamesVBox.addWidget(Label::create(_("Mod") + ":"));
+    ModInfo activeModInfo = ModManager::instance().getModInfo(ModManager::instance().getActiveModName());
+    mapPropertyMod.setText(activeModInfo.displayName);
+    mapPropertyValuesVBox.addWidget(&mapPropertyMod);
     rightVBox.addWidget(Spacer::create());
 
     mainVBox.addWidget(Spacer::create(), 0.04);
@@ -296,7 +304,19 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             curHouseInfo.player1DropDown.setSelectedItem(0);
             curHouseInfo.player1DropDown.addEntry(_("closed"), PLAYER_CLOSED);
             for(unsigned int k = 1; k < PlayerFactory::getList().size(); k++) {
-                curHouseInfo.player1DropDown.addEntry(PlayerFactory::getByIndex(k)->getName(), k);
+                const PlayerFactory::PlayerData* playerData = PlayerFactory::getByIndex(k);
+                if(playerData == nullptr) {
+                    continue;
+                }
+                const std::string& playerClass = playerData->getPlayerClass();
+                if(playerClass.rfind("qBotSupport", 0) == 0 &&
+                   playerClass != "qBotSupportEasy" &&
+                   playerClass != "qBotSupportMedium" &&
+                   playerClass != "qBotSupportHard" &&
+                   playerClass != "qBotSupportBrutal") {
+                    continue;
+                }
+                curHouseInfo.player1DropDown.addEntry(playerData->getName(), k);
             }
             curHouseInfo.player1DropDown.setEnabled(bServer);
         }
@@ -351,7 +371,19 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
             curHouseInfo.player2DropDown.setSelectedItem(0);
             curHouseInfo.player2DropDown.addEntry(_("closed"), PLAYER_CLOSED);
             for(unsigned int k = 1; k < PlayerFactory::getList().size(); k++) {
-                curHouseInfo.player2DropDown.addEntry(PlayerFactory::getByIndex(k)->getName(), k);
+                const PlayerFactory::PlayerData* playerData = PlayerFactory::getByIndex(k);
+                if(playerData == nullptr) {
+                    continue;
+                }
+                const std::string& playerClass = playerData->getPlayerClass();
+                if(playerClass.rfind("qBotSupport", 0) == 0 &&
+                   playerClass != "qBotSupportEasy" &&
+                   playerClass != "qBotSupportMedium" &&
+                   playerClass != "qBotSupportHard" &&
+                   playerClass != "qBotSupportBrutal") {
+                    continue;
+                }
+                curHouseInfo.player2DropDown.addEntry(playerData->getName(), k);
             }
             curHouseInfo.player2DropDown.setEnabled(bServer);
         }
@@ -400,6 +432,10 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         pNetworkManager->setOnPeerDisconnected(std::bind(&CustomGamePlayers::onPeerDisconnected, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
         pNetworkManager->setOnReceiveChangeEventList(std::bind(&CustomGamePlayers::onReceiveChangeEventList, this, std::placeholders::_1));
         pNetworkManager->setOnReceiveChatMessage(std::bind(&CustomGamePlayers::onReceiveChatMessage, this, std::placeholders::_1, std::placeholders::_2));
+        pNetworkManager->setOnConfigMismatch(std::bind(&CustomGamePlayers::onConfigMismatch, this, std::placeholders::_1));
+        pNetworkManager->setOnReceiveModInfo(std::bind(&CustomGamePlayers::onReceiveModInfo, this, std::placeholders::_1, std::placeholders::_2));
+        pNetworkManager->setOnModDownloadComplete(std::bind(&CustomGamePlayers::onModDownloadComplete, this, std::placeholders::_1, std::placeholders::_2));
+        pNetworkManager->setOnReceiveModAck(std::bind(&CustomGamePlayers::onReceiveModAck, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
         if(bServer) {
             pNetworkManager->setGetChangeEventListForNewPlayerCallback(std::bind(&CustomGamePlayers::getChangeEventListForNewPlayer, this, std::placeholders::_1));
@@ -419,6 +455,9 @@ CustomGamePlayers::~CustomGamePlayers()
         pNetworkManager->setOnReceiveChangeEventList(std::function<void (const ChangeEventList&)>());
         pNetworkManager->setOnReceiveChatMessage(std::function<void (const std::string&, const std::string&)>());
         pNetworkManager->setOnStartGame(std::function<void (unsigned int)>());
+        pNetworkManager->setOnReceiveModInfo(std::function<void (const std::string&, const std::string&)>());
+        pNetworkManager->setOnModDownloadComplete(std::function<void (bool, const std::string&)>());
+        pNetworkManager->setOnReceiveModAck(std::function<void (const std::string&, bool, const std::string&)>());
 
         if(bServer) {
             try {
@@ -432,6 +471,13 @@ CustomGamePlayers::~CustomGamePlayers()
 
 void CustomGamePlayers::update() {
     if(startGameTime > 0) {
+        // Check if config mismatch was detected - abort game start
+        if(bConfigMismatchDetected) {
+            SDL_Log("Aborting game start - config mismatch detected");
+            startGameTime = 0;
+            return;
+        }
+        
         if(SDL_GetTicks() >= startGameTime) {
             startGameTime = 0;
 
@@ -442,7 +488,9 @@ void CustomGamePlayers::update() {
             pNetworkManager->setOnStartGame(std::function<void (unsigned int)>());
 
             if(bServer) {
-                pNetworkManager->stopServer();
+                // Stop announcing the game in lobby, but DON'T reset bIsServer
+                // The server needs to remain active during the game for multiplayer budget negotiation
+                pNetworkManager->stopAnnouncing();
             }
 
             addAllPlayersToGameInitSettings();
@@ -640,6 +688,230 @@ void CustomGamePlayers::onReceiveChatMessage(const std::string& name, const std:
     addChatMessage(name, message);
 }
 
+void CustomGamePlayers::onConfigMismatch(const std::string& errorMessage) {
+    SDL_Log("CONFIG MISMATCH DETECTED: %s", errorMessage.c_str());
+    
+    // Set flag to prevent game from starting
+    bConfigMismatchDetected = true;
+    
+    // Cancel game start countdown
+    startGameTime = 0;
+    
+    // Show error dialog
+    openWindow(MsgBox::create(errorMessage));
+    
+    // Also display in chat so all players can see the details
+    if(pNetworkManager != nullptr) {
+        // Send chat message with mismatch details
+        pNetworkManager->sendChatMessage("*** CONFIG MISMATCH DETECTED ***");
+        pNetworkManager->sendChatMessage(errorMessage);
+        pNetworkManager->sendChatMessage("*** FIX CONFIG FILES AND TRY AGAIN ***");
+    }
+    
+    // Stay in lobby - players can see the error in chat and fix their configs
+    // Re-enable dropdowns so they can adjust settings if needed
+    // (Game start was cancelled above)
+}
+
+void CustomGamePlayers::onReceiveModInfo(const std::string& modName, const std::string& modChecksum) {
+    // Client receives mod info from host
+    if(bServer) {
+        // Server shouldn't receive this
+        return;
+    }
+    
+    SDL_Log("CLIENT: Received mod info from host - mod='%s', checksum=%s", modName.c_str(), modChecksum.c_str());
+    
+    hostModName = modName;
+    hostModChecksum = modChecksum;
+    
+    // Compare with our local mod
+    std::string localModName = ModManager::instance().getActiveModName();
+    std::string localChecksum = ModManager::instance().getEffectiveChecksums().combined;
+    
+    SDL_Log("CLIENT: Local mod='%s', checksum=%s", localModName.c_str(), localChecksum.c_str());
+    
+    if(modChecksum == localChecksum) {
+        SDL_Log("CLIENT: Mod checksums match!");
+        addInfoMessage("Mod verified: " + modName);
+        
+        // Send ACK to host - checksums match, ready to start
+        if(pNetworkManager != nullptr) {
+            pNetworkManager->sendModAck(true, localChecksum);
+        }
+        return;
+    }
+    
+    // Checksum mismatch - need to sync
+    SDL_Log("CLIENT: Mod mismatch! Host uses '%s', we have '%s'", modName.c_str(), localModName.c_str());
+    
+    // Check if we have the host's mod locally
+    if(ModManager::instance().modExists(modName)) {
+        // We have the mod, but different version - switch to it
+        SDL_Log("CLIENT: Found mod '%s' locally, but checksums differ. Downloading host's version.", modName.c_str());
+    }
+    
+    // Show message and start download
+    addInfoMessage("Downloading mod '" + modName + "' from host...");
+    bModDownloadInProgress = true;
+    
+    if(pNetworkManager != nullptr) {
+        pNetworkManager->requestModDownload(modName);
+    }
+}
+
+void CustomGamePlayers::onModDownloadComplete(bool success, const std::string& data) {
+    bModDownloadInProgress = false;
+    
+    if(!success) {
+        SDL_Log("CLIENT: Mod download failed: %s", data.c_str());
+        addInfoMessage("Mod download failed: " + data);
+        
+        // Show error dialog
+        openWindow(MsgBox::create(_("Mod download failed: ") + data + "\n\n" + _("Cannot join game with mismatched mods.")));
+        
+        // Set mismatch flag to prevent game start
+        bConfigMismatchDetected = true;
+        return;
+    }
+    
+    SDL_Log("CLIENT: Mod download complete (%zu bytes)", data.size());
+    
+    // Save the received mod
+    if(ModManager::instance().saveReceivedMod(hostModName, data)) {
+        SDL_Log("CLIENT: Mod '%s' saved successfully", hostModName.c_str());
+        
+        // Switch to the new mod
+        if(ModManager::instance().setActiveMod(hostModName)) {
+            // Reload effective game options
+            effectiveGameOptions = ModManager::instance().loadEffectiveGameOptions(settings.gameOptions);
+            
+            // Recalculate checksums after loading new mod
+            ModManager::instance().updateChecksums();
+            std::string newChecksum = ModManager::instance().getEffectiveChecksums().combined;
+            
+            // Update the mod label on screen to show the new mod
+            ModInfo activeModInfo = ModManager::instance().getModInfo(hostModName);
+            mapPropertyMod.setText(activeModInfo.displayName);
+            
+            addInfoMessage("Mod '" + hostModName + "' synced successfully!");
+            SDL_Log("CLIENT: Switched to mod '%s', new checksum: %s", hostModName.c_str(), newChecksum.c_str());
+            
+            // Send ACK to host - mod synced, ready to start
+            if(pNetworkManager != nullptr) {
+                pNetworkManager->sendModAck(true, newChecksum);
+            }
+        } else {
+            SDL_Log("CLIENT: Failed to switch to mod '%s'", hostModName.c_str());
+            addInfoMessage("Failed to activate mod: " + hostModName);
+            bConfigMismatchDetected = true;
+            
+            // Send failure ACK
+            if(pNetworkManager != nullptr) {
+                pNetworkManager->sendModAck(false, "");
+            }
+        }
+    } else {
+        SDL_Log("CLIENT: Failed to save mod '%s'", hostModName.c_str());
+        addInfoMessage("Failed to save mod: " + hostModName);
+        bConfigMismatchDetected = true;
+        
+        // Send failure ACK
+        if(pNetworkManager != nullptr) {
+            pNetworkManager->sendModAck(false, "");
+        }
+    }
+}
+
+void CustomGamePlayers::onReceiveModAck(const std::string& playerName, bool success, const std::string& modChecksum) {
+    // Host receives mod sync acknowledgment from client
+    if(!bServer) {
+        // Client shouldn't receive this
+        return;
+    }
+    
+    if(!bWaitingForModAcks) {
+        SDL_Log("HOST: Received unexpected mod ACK from '%s' (not waiting for ACKs)", playerName.c_str());
+        return;
+    }
+    
+    if(!success) {
+        SDL_Log("HOST: Client '%s' failed to sync mod!", playerName.c_str());
+        addInfoMessage("Client '" + playerName + "' failed to sync mod!");
+        
+        // Cancel game start
+        bConfigMismatchDetected = true;
+        startGameTime = 0;
+        bWaitingForModAcks = false;
+        
+        openWindow(MsgBox::create(_("Client '") + playerName + _("' failed to sync mod.\nGame cannot start.")));
+        return;
+    }
+    
+    // Verify checksum matches
+    std::string hostChecksum = ModManager::instance().getEffectiveChecksums().combined;
+    if(modChecksum != hostChecksum) {
+        SDL_Log("HOST: Client '%s' has wrong checksum! Expected: %s, Got: %s",
+                playerName.c_str(), hostChecksum.c_str(), modChecksum.c_str());
+        addInfoMessage("Checksum mismatch from '" + playerName + "'!");
+        
+        // Cancel game start
+        bConfigMismatchDetected = true;
+        startGameTime = 0;
+        bWaitingForModAcks = false;
+        
+        openWindow(MsgBox::create(_("Client '") + playerName + _("' has mismatched checksums.\nGame cannot start.")));
+        return;
+    }
+    
+    SDL_Log("HOST: Client '%s' mod synced OK (checksum: %s)", playerName.c_str(), modChecksum.c_str());
+    addInfoMessage("Client '" + playerName + "' ready");
+    
+    clientsAckedMod.insert(playerName);
+    checkAllClientsReady();
+}
+
+void CustomGamePlayers::checkAllClientsReady() {
+    if(!bServer || !bWaitingForModAcks) {
+        return;
+    }
+    
+    // Get list of all connected remote peers (humans only). AI slots are not peers.
+    std::set<std::string> connectedPlayers;
+    if (pNetworkManager != nullptr) {
+        for (const auto& name : pNetworkManager->getConnectedPeers()) {
+            if (name != settings.general.playerName) {
+                connectedPlayers.insert(name);
+            }
+        }
+    }
+    
+    SDL_Log("HOST: Checking if all clients ready - ACKed: %zu, Connected: %zu",
+            clientsAckedMod.size(), connectedPlayers.size());
+    
+    // Check if all connected players have ACKed
+    bool allReady = true;
+    for(const auto& player : connectedPlayers) {
+        if(clientsAckedMod.find(player) == clientsAckedMod.end()) {
+            SDL_Log("HOST: Still waiting for ACK from '%s'", player.c_str());
+            allReady = false;
+        }
+    }
+    
+    if(allReady) {
+        SDL_Log("HOST: All %zu clients ready! Starting game...", connectedPlayers.size());
+        addInfoMessage("All clients synced - starting game!");
+        bWaitingForModAcks = false;
+        
+        // Now actually start the game
+        unsigned int timeLeft = 3000;  // 3 seconds countdown
+        startGameTime = SDL_GetTicks() + timeLeft;
+        pNetworkManager->sendStartGame(timeLeft);
+        
+        disableAllDropDownBoxes();
+    }
+}
+
 void CustomGamePlayers::onNext()
 {
     // check if we have at least two houses on the map and if we have more than one team
@@ -687,11 +959,42 @@ void CustomGamePlayers::onNext()
         addAllPlayersToGameInitSettings();
 
         if(pNetworkManager != nullptr) {
-            unsigned int timeLeft = 5000;
-            startGameTime = SDL_GetTicks() + timeLeft;
-            pNetworkManager->sendStartGame(timeLeft);
-
-            disableAllDropDownBoxes();
+            // Multiplayer game - send and verify config hashes
+            QuantBotConfig& config = getQuantBotConfig();
+            std::string quantBotHash = config.getConfigHash();
+            std::string objectDataHash = getObjectDataHash();
+            
+            SDL_Log("==================== MULTIPLAYER CONFIG CHECK ====================");
+            SDL_Log("Role: %s", pNetworkManager->isServer() ? "SERVER" : "CLIENT");
+            SDL_Log("Config file locations:");
+            SDL_Log("  QuantBot Config: %s", getQuantBotConfigFilepath().c_str());
+            SDL_Log("  ObjectData.ini:  %s", getObjectDataFilepath().c_str());
+            SDL_Log("");
+            SDL_Log("Config being sent:");
+            SDL_Log("  Game version: %s", VERSIONSTRING);
+            SDL_Log("  QuantBot Config.ini hash: %s", quantBotHash.c_str());
+            SDL_Log("  ObjectData.ini hash:      %s", objectDataHash.c_str());
+            SDL_Log("==================================================================");
+            
+            // Send version and config hashes to all players for verification
+            pNetworkManager->sendConfigHash(quantBotHash, objectDataHash, VERSIONSTRING);
+            
+            // Send mod info for mod sync
+            std::string modName = ModManager::instance().getActiveModName();
+            std::string modChecksum = ModManager::instance().getEffectiveChecksums().combined;
+            SDL_Log("HOST: Sending mod info: mod='%s', checksum=%s", modName.c_str(), modChecksum.c_str());
+            pNetworkManager->sendModInfo(modName, modChecksum);
+            
+            // Wait for all clients to acknowledge mod sync before starting
+            // The actual game start will happen in checkAllClientsReady() after all ACKs
+            clientsAckedMod.clear();
+            bWaitingForModAcks = true;
+            addInfoMessage("Waiting for clients to sync mod...");
+            SDL_Log("HOST: Waiting for mod ACKs from clients before starting game");
+            
+            // Don't start game yet - will be started when all clients ACK
+            // For single-player or if no other clients, check immediately
+            checkAllClientsReady();
         } else {
             startSinglePlayerGame(gameInitSettings);
 
@@ -1102,7 +1405,19 @@ void CustomGamePlayers::onPeerDisconnected(const std::string& playername, bool b
                 if(gameInitSettings.getGameType() != GameType::LoadMultiplayer) {
                     curDropDownBox.addEntry(_("closed"), PLAYER_CLOSED);
                     for(unsigned int k = 1; k < PlayerFactory::getList().size(); k++) {
-                        curDropDownBox.addEntry(PlayerFactory::getByIndex(k)->getName(), k);
+                        const PlayerFactory::PlayerData* playerData = PlayerFactory::getByIndex(k);
+                        if(playerData == nullptr) {
+                            continue;
+                        }
+                        const std::string& playerClass = playerData->getPlayerClass();
+                        if(playerClass.rfind("qBotSupport", 0) == 0 &&
+                           playerClass != "qBotSupportEasy" &&
+                           playerClass != "qBotSupportMedium" &&
+                           playerClass != "qBotSupportHard" &&
+                           playerClass != "qBotSupportBrutal") {
+                            continue;
+                        }
+                        curDropDownBox.addEntry(playerData->getName(), k);
                     }
                 }
 
@@ -1139,6 +1454,12 @@ void CustomGamePlayers::onPeerDisconnected(const std::string& playername, bool b
 }
 
 void CustomGamePlayers::onStartGame(unsigned int timeLeft) {
+    // Don't start if there was a config mismatch
+    if(bConfigMismatchDetected) {
+        SDL_Log("Ignoring STARTGAME packet - config mismatch already detected");
+        return;
+    }
+    
     startGameTime = SDL_GetTicks() + timeLeft;
     disableAllDropDownBoxes();
 }
@@ -1168,7 +1489,19 @@ void CustomGamePlayers::setPlayer2Slot(const std::string& playername, int slot) 
                 if(gameInitSettings.getGameType() != GameType::LoadMultiplayer) {
                     curDropDownBox.addEntry(_("closed"), PLAYER_CLOSED);
                     for(unsigned int k = 1; k < PlayerFactory::getList().size(); k++) {
-                        curDropDownBox.addEntry(PlayerFactory::getByIndex(k)->getName(), k);
+                        const PlayerFactory::PlayerData* playerData = PlayerFactory::getByIndex(k);
+                        if(playerData == nullptr) {
+                            continue;
+                        }
+                        const std::string& playerClass = playerData->getPlayerClass();
+                        if(playerClass.rfind("qBotSupport", 0) == 0 &&
+                           playerClass != "qBotSupportEasy" &&
+                           playerClass != "qBotSupportMedium" &&
+                           playerClass != "qBotSupportHard" &&
+                           playerClass != "qBotSupportBrutal") {
+                            continue;
+                        }
+                        curDropDownBox.addEntry(playerData->getName(), k);
                     }
                 }
 

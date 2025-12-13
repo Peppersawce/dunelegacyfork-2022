@@ -22,16 +22,43 @@
 #include <FileClasses/GFXManager.h>
 #include <FileClasses/TextManager.h>
 
+#include <GUI/dune/GameOptionsWindow.h>
+
 #include <GameInitSettings.h>
 #include <sand.h>
 
 static const int houseOrder[] = { HOUSE_ATREIDES, HOUSE_ORDOS, HOUSE_HARKONNEN, HOUSE_MERCENARY, HOUSE_FREMEN, HOUSE_SARDAUKAR };
+
+namespace {
+const char* const kSupportPlayerClasses[] = {
+    "",
+    "qBotSupportEasy",
+    "qBotSupportMedium",
+    "qBotSupportHard",
+    "qBotSupportBrutal"
+};
+
+constexpr int kSupportOptionCount = sizeof(kSupportPlayerClasses) / sizeof(kSupportPlayerClasses[0]);
+
+const char* const kEnemyAIClasses[] = {
+    "CampaignAIPlayer",
+    "qBotEasy",
+    "qBotMedium",
+    "qBotHard",
+    "qBotBrutal"
+};
+
+constexpr int kEnemyAIOptionCount = sizeof(kEnemyAIClasses) / sizeof(kEnemyAIClasses[0]);
+}
 
 SinglePlayerSkirmishMenu::SinglePlayerSkirmishMenu() : MenuBase()
 {
     currentHouseChoiceScrollPos = 0;
     selectedButton = 1;
     mission = 1;
+    supportBotIndex = 0;
+    enemyAIIndex = 0;  // Default to CampaignAIPlayer
+    currentGameOptions = effectiveGameOptions;  // Use mod-aware effective options
 
     // set up window
     SDL_Texture *pBackground = pGFXManager->getUIGraphic(UI_MenuBackground);
@@ -54,14 +81,59 @@ SinglePlayerSkirmishMenu::SinglePlayerSkirmishMenu() : MenuBase()
     windowWidget.addWidget(&buttonBorder, dest2);
 
     // set up menu buttons
-    windowWidget.addWidget(&menuButtonsVBox,Point((getRendererWidth() - 160)/2,getRendererHeight()/2 + 64), Point(160,111));
+    windowWidget.addWidget(&menuButtonsVBox,Point((getRendererWidth() - 160)/2,getRendererHeight()/2 + 64), Point(160,166));
 
     startButton.setText(_("Start"));
     startButton.setOnClick(std::bind(&SinglePlayerSkirmishMenu::onStart, this));
     menuButtonsVBox.addWidget(&startButton);
     startButton.setActive();
 
-    menuButtonsVBox.addWidget(VSpacer::create(79));
+    menuButtonsVBox.addWidget(VSpacer::create(8));
+
+    // AI Support explanation
+    Label* supportLabel = Label::create(_("AI support: help you fight"));
+    supportLabel->setTextColor(COLOR_BLACK);
+    supportLabel->setTextFontSize(12);
+    supportLabel->setAlignment(Alignment_HCenter);
+    menuButtonsVBox.addWidget(supportLabel);
+    menuButtonsVBox.addWidget(VSpacer::create(2));
+
+    supportBotDropDown.addEntry(_("AI Support: None"), 0);
+    supportBotDropDown.addEntry(_("AI Support: Easy"), 1);
+    supportBotDropDown.addEntry(_("AI Support: Medium"), 2);
+    supportBotDropDown.addEntry(_("AI Support: Hard"), 3);
+    supportBotDropDown.addEntry(_("AI Support: Brutal"), 4);
+    supportBotDropDown.setSelectedItem(0);
+    supportBotDropDown.setOnSelectionChange(std::bind(&SinglePlayerSkirmishMenu::onSupportBotSelectionChanged, this, std::placeholders::_1));
+    menuButtonsVBox.addWidget(&supportBotDropDown);
+    updateSupportBotLabel();
+
+    menuButtonsVBox.addWidget(VSpacer::create(6));
+
+    // Enemy AI explanation
+    Label* enemyAILabel = Label::create(_("Enemy AI"));
+    enemyAILabel->setTextColor(COLOR_BLACK);
+    enemyAILabel->setTextFontSize(12);
+    enemyAILabel->setAlignment(Alignment_HCenter);
+    menuButtonsVBox.addWidget(enemyAILabel);
+    menuButtonsVBox.addWidget(VSpacer::create(2));
+
+    enemyAIDropDown.addEntry(_("Enemy AI: Campaign AI"), 0);
+    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Easy"), 1);
+    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Medium"), 2);
+    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Hard"), 3);
+    enemyAIDropDown.addEntry(_("Enemy AI: QuantBot Brutal"), 4);
+    enemyAIDropDown.setSelectedItem(0);
+    enemyAIDropDown.setOnSelectionChange(std::bind(&SinglePlayerSkirmishMenu::onEnemyAISelectionChanged, this, std::placeholders::_1));
+    menuButtonsVBox.addWidget(&enemyAIDropDown);
+
+    menuButtonsVBox.addWidget(VSpacer::create(6));
+
+    gameOptionsButton.setText(_("Game Options"));
+    gameOptionsButton.setOnClick(std::bind(&SinglePlayerSkirmishMenu::onGameOptions, this));
+    menuButtonsVBox.addWidget(&gameOptionsButton);
+
+    menuButtonsVBox.addWidget(VSpacer::create(6));
 
     backButton.setText(_("Back"));
     backButton.setOnClick(std::bind(&SinglePlayerSkirmishMenu::onCancel, this));
@@ -150,26 +222,55 @@ SinglePlayerSkirmishMenu::~SinglePlayerSkirmishMenu()
     ;
 }
 
+void SinglePlayerSkirmishMenu::onChildWindowClose(Window* pChildWindow) {
+    GameOptionsWindow* pGameOptionsWindow = dynamic_cast<GameOptionsWindow*>(pChildWindow);
+    if(pGameOptionsWindow != nullptr) {
+        currentGameOptions = pGameOptionsWindow->getGameOptions();
+    }
+}
+
 void SinglePlayerSkirmishMenu::onStart()
 {
-    HOUSETYPE houseChoice = (HOUSETYPE) houseOrder[currentHouseChoiceScrollPos + selectedButton];
+    HOUSETYPE houseChoice = static_cast<HOUSETYPE>(houseOrder[currentHouseChoiceScrollPos + selectedButton]);
 
-    GameInitSettings init(houseChoice, mission, settings.gameOptions);
+    supportBotIndex = supportBotDropDown.getSelectedEntryIntData();
+    if(supportBotIndex < 0 || supportBotIndex >= kSupportOptionCount) {
+        supportBotIndex = 0;
+    }
+
+    enemyAIIndex = enemyAIDropDown.getSelectedEntryIntData();
+    if(enemyAIIndex < 0 || enemyAIIndex >= kEnemyAIOptionCount) {
+        enemyAIIndex = 0;
+    }
+
+    const bool supportSelected = (supportBotIndex > 0);
+    const char* supportPlayerClass = supportSelected ? kSupportPlayerClasses[supportBotIndex] : nullptr;
+    const char* enemyAIClass = kEnemyAIClasses[enemyAIIndex];
+
+    GameInitSettings init(houseChoice, mission, currentGameOptions);
+    if(supportSelected) {
+        init.setMultiplePlayersPerHouse(true);
+    }
 
     for(int houseID = 0; houseID < NUM_HOUSES; houseID++) {
         if(houseID == houseChoice) {
-            GameInitSettings::HouseInfo humanHouseInfo(houseChoice, 1);
-            humanHouseInfo.addPlayerInfo( GameInitSettings::PlayerInfo(settings.general.playerName, HUMANPLAYERCLASS) );
+            GameInitSettings::HouseInfo humanHouseInfo(static_cast<HOUSETYPE>(houseID), 1);
+            humanHouseInfo.addPlayerInfo(GameInitSettings::PlayerInfo(settings.general.playerName, HUMANPLAYERCLASS));
+
+            if(supportSelected && supportPlayerClass != nullptr && *supportPlayerClass != '\0') {
+                std::string allyName = getHouseNameByNumber(static_cast<HOUSETYPE>(houseID)) + " " + _("(AI Support)");
+                humanHouseInfo.addPlayerInfo(GameInitSettings::PlayerInfo(allyName, supportPlayerClass));
+            }
+
             init.addHouseInfo(humanHouseInfo);
         } else {
-            GameInitSettings::HouseInfo aiHouseInfo((HOUSETYPE) houseID, 2);
-            aiHouseInfo.addPlayerInfo( GameInitSettings::PlayerInfo(getHouseNameByNumber( (HOUSETYPE) houseID), settings.ai.campaignAI) );
+            GameInitSettings::HouseInfo aiHouseInfo(static_cast<HOUSETYPE>(houseID), 2);
+            aiHouseInfo.addPlayerInfo(GameInitSettings::PlayerInfo(getHouseNameByNumber(static_cast<HOUSETYPE>(houseID)), enemyAIClass));
             init.addHouseInfo(aiHouseInfo);
         }
     }
 
     startSinglePlayerGame(init);
-
     quit();
 }
 
@@ -237,6 +338,33 @@ void SinglePlayerSkirmishMenu::onMissionDecrement()
         mission = 22;
     }
     missionCounter.setCount(mission);
+}
+
+void SinglePlayerSkirmishMenu::updateSupportBotLabel()
+{
+    if(supportBotIndex < 0 || supportBotIndex >= kSupportOptionCount) {
+        supportBotIndex = 0;
+    }
+    if(supportBotDropDown.getNumEntries() > supportBotIndex) {
+        supportBotDropDown.setSelectedItem(supportBotIndex);
+    }
+}
+
+void SinglePlayerSkirmishMenu::onSupportBotSelectionChanged(bool /*interactive*/)
+{
+    int entry = supportBotDropDown.getSelectedEntryIntData();
+    supportBotIndex = (entry >= 0 && entry < kSupportOptionCount) ? entry : 0;
+}
+
+void SinglePlayerSkirmishMenu::onEnemyAISelectionChanged(bool /*interactive*/)
+{
+    int entry = enemyAIDropDown.getSelectedEntryIntData();
+    enemyAIIndex = (entry >= 0 && entry < kEnemyAIOptionCount) ? entry : 0;
+}
+
+void SinglePlayerSkirmishMenu::onGameOptions()
+{
+    openWindow(GameOptionsWindow::create(currentGameOptions));
 }
 
 void SinglePlayerSkirmishMenu::updateHouseChoice()

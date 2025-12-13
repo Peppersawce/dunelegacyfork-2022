@@ -39,7 +39,7 @@ class HumanPlayer;
 class House
 {
 public:
-    House(int newHouse, int newCredits, int maxUnits, Uint8 teamID = 0, int quota = 0);
+    House(int newHouse, int newCredits, int maxUnits, int maxHarvesters, Uint8 teamID = 0, int quota = 0);
     explicit House(InputStream& stream);
     void init();
     virtual ~House();
@@ -99,11 +99,18 @@ public:
 
     inline int getQuota() const { return quota; };
     inline int getMaxUnits() const { return maxUnits; };
+    inline int getMaxHarvesters() const { return maxHarvesters; };
 
     inline void informContactWithEnemy() { bHadContactWithEnemy = true; };
     inline bool hadContactWithEnemy() const { return bHadContactWithEnemy; };
     inline void informDirectContactWithEnemy() { bHadDirectContactWithEnemy = true; };
     inline bool hadDirectContactWithEnemy() const { return bHadDirectContactWithEnemy; };
+    
+    // Original AI activation control (from Dune Dynasty)
+    inline void activateAI() { isAIActive = true; };
+    inline bool isAIActivated() const { return isAIActive; };
+    inline void triggerFullScaleAttack() { doneFullScaleAttack = true; };
+    inline bool hasTriggeredFullScaleAttack() const { return doneFullScaleAttack; };
 
     inline void informVisibleEnemyUnit() {
         numVisibleEnemyUnits++;
@@ -118,6 +125,7 @@ public:
         \return true, if the limit is already reached, false if building further ground units is allowed
     */
     inline bool isGroundUnitLimitReached() const {
+        if (maxUnits == 0) return false;  // 0 = unlimited units
         int numGroundUnit = numUnits - numItem[Unit_Soldier] - numItem[Unit_Trooper] - numItem[Unit_Carryall] - numItem[Unit_Ornithopter];
         return (numGroundUnit + (numItem[Unit_Soldier]+2)/3 + (numItem[Unit_Trooper]+2)/3  >= maxUnits);
     };
@@ -127,6 +135,7 @@ public:
         \return true, if the limit is already reached, false if building further infantry units is allowed
     */
     inline bool isInfantryUnitLimitReached() const {
+        if (maxUnits == 0) return false;  // 0 = unlimited units
         int numGroundUnit = numUnits - numItem[Unit_Soldier] - numItem[Unit_Trooper] - numItem[Unit_Carryall] - numItem[Unit_Ornithopter];
         return (numGroundUnit + numItem[Unit_Soldier]/3 + numItem[Unit_Trooper]/3  >= maxUnits);
     };
@@ -136,7 +145,17 @@ public:
         \return true, if the limit is already reached, false if building further air units is allowed
     */
     inline bool isAirUnitLimitReached() const {
+        if (maxUnits == 0) return false;  // 0 = unlimited units
         return (numItem[Unit_Carryall] + numItem[Unit_Ornithopter] >= 11*std::max(maxUnits,25)/25);
+    }
+
+    /**
+        This function checks if the limit for harvesters is already reached.
+        \return true, if the limit is already reached, false if building further harvesters is allowed
+    */
+    inline bool isHarvesterLimitReached() const {
+        if (maxHarvesters == 0) return false;  // 0 = unlimited harvesters
+        return (numItem[Unit_Harvester] >= maxHarvesters);
     }
 
     inline Choam& getChoam() { return choam; };
@@ -220,6 +239,7 @@ protected:
     int oldCredits;           ///< amount of credits in the last game cycle (used for playing the credits tick sound)
 
     int maxUnits;             ///< maximum number of units this house is allowed to build
+    int maxHarvesters;        ///< maximum number of harvesters this house is allowed to build
     int quota;                ///< number of credits to win
 
     Choam   choam;            ///< the things that are deliverable at the starport
@@ -230,6 +250,12 @@ protected:
 
     bool bHadContactWithEnemy;      ///< did this house already have contact with an enemy (= tiles with enemy units were explored by this house or allied houses)
     bool bHadDirectContactWithEnemy;///< did this house already have direct contact with an enemy (= tiles with enemy units were explored by this house)
+    
+        // Original AI activation flags (from Dune Dynasty)
+        // SAVE COMPATIBILITY NOTE: Adding these flags requires SAVEGAMEVERSION bump (9803).
+        // Old saves will fail to load with clear error message. This is intentional for major AI replacement.
+        bool isAIActive;                ///< AI is "awake" - activated when ground units make contact (mutual activation)
+        bool doneFullScaleAttack;       ///< One-time all-in assault flag - prevents repeated full-scale attacks
 
     int numVisibleEnemyUnits;   ///< the number of enemy units visible; will be reset to 0 each cycle
     int numVisibleFriendlyUnits;///< the number of visible units from the same team; will be reset to 0 each cycle

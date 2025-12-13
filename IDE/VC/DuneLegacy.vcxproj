@@ -105,6 +105,7 @@
     </Link>
     <PostBuildEvent>
       <Command>robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+robocopy "..\..\config\." "$(OutDir)config\." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -134,6 +135,7 @@ copy "x64\Debug\SDL2main.dll" "$(OutDir)" 2&gt;nul || echo SDL2main.dll not foun
 copy "x64\Debug\SDL2_mixer.dll" "$(OutDir)" 2&gt;nul || echo SDL2_mixer.dll not found
 copy "x64\Debug\SDL2_ttf.dll" "$(OutDir)" 2&gt;nul || echo SDL2_ttf.dll not found
 robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+robocopy "..\..\config\." "$(OutDir)config\." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -146,10 +148,10 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <FloatingPointModel>Fast</FloatingPointModel>
-      <SDLCheck>true</SDLCheck>
+      <SDLCheck>false</SDLCheck>
       <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
-      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <WarningVersion>
@@ -158,17 +160,25 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <ForcedIncludeFiles>stdafx.h</ForcedIncludeFiles>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <LanguageStandard_C>stdc17</LanguageStandard_C>
-      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
-      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <StringPooling>true</StringPooling>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <DebugInformationFormat>None</DebugInformationFormat>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>SDL2.lib;SDL2main.lib;imm32.lib;version.lib;ws2_32.lib;winmm.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
       <Command>robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+robocopy "..\..\config\." "$(OutDir)config\." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -181,8 +191,8 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <WholeProgramOptimization>true</WholeProgramOptimization>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <FloatingPointModel>Fast</FloatingPointModel>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;_SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING;_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CRT_NONSTDC_NO_DEPRECATE;_CRT_DECLARE_NONSTDC_NAMES;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_WINSOCK_DEPRECATED_NO_WARNINGS;_SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING;_SILENCE_STDEXT_ARR_ITERS_DEPRECATION_WARNING;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <AdditionalIncludeDirectories>..\..\include;..\..\external\SDL\include;..\..\external\SDL_mixer\include;..\..\external\SDL_ttf\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -194,13 +204,20 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <LanguageStandard_C>Default</LanguageStandard_C>
       <DebugInformationFormat>None</DebugInformationFormat>
-      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <StringPooling>true</StringPooling>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>SDL2.lib;SDL2main.lib;imm32.lib;version.lib;ws2_32.lib;winmm.lib;usp10.lib;gdi32.lib;rpcrt4.lib;opengl32.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Windows</SubSystem>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
       <Command>copy "x64\Release\SDL2.dll" "$(OutDir)" 2&gt;nul || echo SDL2.dll not found
@@ -208,6 +225,7 @@ copy "x64\Release\SDL2main.dll" "$(OutDir)" 2&gt;nul || echo SDL2main.dll not fo
 copy "x64\Release\SDL2_mixer.dll" "$(OutDir)" 2&gt;nul || echo SDL2_mixer.dll not found
 copy "x64\Release\SDL2_ttf.dll" "$(OutDir)" 2&gt;nul || echo SDL2_ttf.dll not found
 robocopy "..\..\data\." "$(OutDir)." /E /NP /NJH /NJS
+robocopy "..\..\config\." "$(OutDir)config\." /E /NP /NJH /NJS
 IF %ERRORLEVEL% LSS 8 exit 0</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
@@ -219,6 +237,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClInclude Include="..\..\include\Command.h" />
     <ClInclude Include="..\..\include\CommandManager.h" />
     <ClInclude Include="..\..\include\config.h" />
+    <ClInclude Include="..\..\include\CrashHandler.h" />
     <ClInclude Include="..\..\include\CutScenes\CrossBlendVideoEvent.h" />
     <ClInclude Include="..\..\include\CutScenes\CutScene.h" />
     <ClInclude Include="..\..\include\CutScenes\CutSceneMusicTrigger.h" />
@@ -429,12 +448,14 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClInclude Include="..\..\include\players\Player.h" />
     <ClInclude Include="..\..\include\players\PlayerFactory.h" />
     <ClInclude Include="..\..\include\players\QuantBot.h" />
+    <ClInclude Include="..\..\include\players\QuantBotConfig.h" />
     <ClInclude Include="..\..\include\players\SmartBot.h" />
     <ClInclude Include="..\..\include\RadarView.h" />
     <ClInclude Include="..\..\include\RadarViewBase.h" />
     <ClInclude Include="..\..\include\sand.h" />
     <ClInclude Include="..\..\include\ScreenBorder.h" />
     <ClInclude Include="..\..\include\SoundPlayer.h" />
+    <ClInclude Include="..\..\include\SpatialGrid.h" />
     <ClInclude Include="..\..\include\structures\Barracks.h" />
     <ClInclude Include="..\..\include\structures\BuilderBase.h" />
     <ClInclude Include="..\..\include\structures\ConstructionYard.h" />
@@ -493,6 +514,7 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClCompile Include="..\..\src\Choam.cpp" />
     <ClCompile Include="..\..\src\Command.cpp" />
     <ClCompile Include="..\..\src\CommandManager.cpp" />
+    <ClCompile Include="..\..\src\CrashHandler.cpp" />
     <ClCompile Include="..\..\src\CutScenes\CrossBlendVideoEvent.cpp" />
     <ClCompile Include="..\..\src\CutScenes\CutScene.cpp" />
     <ClCompile Include="..\..\src\CutScenes\CutSceneTrigger.cpp" />
@@ -902,11 +924,18 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
     <ClCompile Include="..\..\src\players\Player.cpp" />
     <ClCompile Include="..\..\src\players\PlayerFactory.cpp" />
     <ClCompile Include="..\..\src\players\QuantBot.cpp" />
+    <ClCompile Include="..\..\src\players\QuantBotConfig.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Use</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Use</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Use</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Use</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\..\src\players\SmartBot.cpp" />
     <ClCompile Include="..\..\src\RadarView.cpp" />
     <ClCompile Include="..\..\src\sand.cpp" />
     <ClCompile Include="..\..\src\ScreenBorder.cpp" />
     <ClCompile Include="..\..\src\SoundPlayer.cpp" />
+    <ClCompile Include="..\..\src\SpatialGrid.cpp" />
     <ClCompile Include="..\..\src\structures\Barracks.cpp" />
     <ClCompile Include="..\..\src\structures\BuilderBase.cpp" />
     <ClCompile Include="..\..\src\structures\ConstructionYard.cpp" />
@@ -972,6 +1001,17 @@ IF %ERRORLEVEL% LSS 8 exit 0</Command>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="..\..\resource.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\config\Dune Legacy.ini">
+      <DeploymentContent>true</DeploymentContent>
+    </None>
+    <None Include="..\..\config\ObjectData.ini">
+      <DeploymentContent>true</DeploymentContent>
+    </None>
+    <None Include="..\..\config\QuantBot Config.ini">
+      <DeploymentContent>true</DeploymentContent>
+    </None>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

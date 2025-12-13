@@ -25,13 +25,17 @@
 class GameServerInfo {
 public:
     ENetAddress serverAddress;
+    ENetAddress localAddress;     // Local/LAN IP address (for NAT traversal)
     std::string serverName;
     std::string serverVersion;
     std::string mapName;
+    std::string modName;          // Active mod name (e.g., "vanilla", "balanced-warfare")
+    std::string modVersion;       // Active mod version (user-defined)
     int numPlayers;
     int maxPlayers;
     bool bPasswordProtected;
     Uint32 lastUpdate;
+    std::string localIP;          // Local IP as string (from metaserver)
 
     /**
         Do not compare numPlayers, bPasswordProtected and lastUpdate

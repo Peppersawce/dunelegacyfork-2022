@@ -38,6 +38,8 @@
 #include <Menu/MainMenu.h>
 #include <Menu/OptionsMenu.h>
 
+#include <misc/DiscordManager.h>
+
 #include <misc/fnkdat.h>
 #include <misc/FileSystem.h>
 #include <misc/Scaler.h>
@@ -45,7 +47,12 @@
 #include <misc/exceptions.h>
 #include <misc/format.h>
 #include <misc/SDL2pp.h>
+#include <misc/md5.h>
 
+#include <players/QuantBotConfig.h>
+#include <mod/ModManager.h>
+
+#include <CrashHandler.h>
 #include <SoundPlayer.h>
 
 #include <mmath.h>
@@ -57,6 +64,7 @@
 #include <iostream>
 #include <typeinfo>
 #include <future>
+#include <array>
 #include <ctime>
 //#include <sys/types.h>
 //#include <sys/stat.h>
@@ -178,10 +186,22 @@ void setVideoMode(int displayIndex)
         fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
         exit(EXIT_FAILURE);
     }
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE);
+    // Create renderer (VSync set separately for macOS compatibility)
+    Uint32 rendererFlags = SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE;
+    
+    renderer = SDL_CreateRenderer(window, -1, rendererFlags);
     if (!renderer) {
         fprintf(stderr, "SDL_CreateRenderer failed: %s\n", SDL_GetError());
         exit(EXIT_FAILURE);
+    }
+    
+    // Set VSync after renderer creation (works better on macOS Metal)
+    if(settings.video.frameLimit) {
+        SDL_RenderSetVSync(renderer, 1);
+        SDL_Log("VSync enabled");
+    } else {
+        SDL_RenderSetVSync(renderer, 0);
+        SDL_Log("VSync disabled");
     }
     SDL_RenderSetLogicalSize(renderer, settings.video.width, settings.video.height);
     screenTexture = SDL_CreateTexture(renderer, SCREEN_FORMAT, SDL_TEXTUREACCESS_TARGET, settings.video.width, settings.video.height);
@@ -196,7 +216,7 @@ void setVideoMode(int displayIndex)
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(screenTexture, SDL_ScaleModeNearest);
 
-    SDL_ShowCursor(SDL_DISABLE);
+    SDL_ShowCursor(SDL_ENABLE);
 }
 
 void toogleFullscreen()
@@ -239,11 +259,18 @@ void toogleFullscreen()
 
 std::string getConfigFilepath()
 {
-    // determine path to config file
+    // User config file is stored in user directory (AppData on Windows, ~/.config on Linux, etc.)
     char tmp[FILENAME_MAX];
-    fnkdat(CONFIGFILENAME, tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT);
-
+    if(fnkdat(CONFIGFILENAME, tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT) < 0) {
+        THROW(std::runtime_error, "fnkdat() failed for config file!");
+    }
     return std::string(tmp);
+}
+
+std::string getConfigTemplateFilepath()
+{
+    // Template config file is in config subdirectory of game directory
+    return getDuneLegacyDataDir() + "/config/" + CONFIGFILENAME;
 }
 
 std::string getLogFilepath()
@@ -257,10 +284,243 @@ std::string getLogFilepath()
     return std::string(tmp);
 }
 
+std::string getPerformanceLogFilepath()
+{
+    // determine path to performance logfile
+    char tmp[FILENAME_MAX];
+    if(fnkdat("Dune Legacy-Performance.log", tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT) < 0) {
+        THROW(std::runtime_error, "fnkdat() failed for performance log!");
+    }
+
+    return std::string(tmp);
+}
+
+std::string getObjectDataConfigFilepath()
+{
+    // If ModManager is initialized and a non-vanilla mod is active, use mod path
+    if (ModManager::instance().isInitialized() && 
+        ModManager::instance().getActiveModName() != "vanilla") {
+        return ModManager::instance().getActiveObjectDataPath();
+    }
+    
+    // Default: user config directory (preserves existing user customizations)
+    char tmp[FILENAME_MAX];
+    if(fnkdat("config/ObjectData.ini", tmp, FILENAME_MAX, FNKDAT_USER | FNKDAT_CREAT) < 0) {
+        THROW(std::runtime_error, "fnkdat() failed for ObjectData.ini!");
+    }
+    return std::string(tmp);
+}
+
+std::string getObjectDataTemplateFilepath()
+{
+    // Template ObjectData.ini.default is in config subdirectory of game directory
+    return getDuneLegacyDataDir() + "/config/ObjectData.ini.default";
+}
+
+static std::string getQuantBotTemplateFilepath()
+{
+    return getDuneLegacyDataDir() + "/config/QuantBot Config.ini.default";
+}
+
+static bool computeFileDigest(const std::string& filepath, std::array<unsigned char, 16>& digest)
+{
+    if(md5_file(filepath.c_str(), digest.data()) != 0) {
+        return false;
+    }
+    return true;
+}
+
+static bool areConfigFilesOutOfSync(bool& objectDataOutOfSync, bool& quantBotOutOfSync)
+{
+    objectDataOutOfSync = false;
+    quantBotOutOfSync = false;
+
+    const std::string objectTemplate = getObjectDataTemplateFilepath();
+    const std::string objectUser = getObjectDataConfigFilepath();
+
+    if(!existsFile(objectTemplate)) {
+        SDL_Log("Warning: Template ObjectData.ini.default missing at %s", objectTemplate.c_str());
+        objectDataOutOfSync = true;
+    } else if(!existsFile(objectUser)) {
+        SDL_Log("ObjectData.ini missing at %s", objectUser.c_str());
+        objectDataOutOfSync = true;
+    } else {
+        std::array<unsigned char, 16> templateDigest{};
+        std::array<unsigned char, 16> userDigest{};
+        if(!computeFileDigest(objectTemplate, templateDigest) || !computeFileDigest(objectUser, userDigest)) {
+            SDL_Log("Warning: Unable to compare ObjectData configuration files.");
+            objectDataOutOfSync = true;
+        } else if(templateDigest != userDigest) {
+            objectDataOutOfSync = true;
+        }
+    }
+
+    const std::string quantTemplate = getQuantBotTemplateFilepath();
+    const std::string quantUser = getQuantBotConfigFilepath();
+
+    if(!existsFile(quantTemplate)) {
+        SDL_Log("Warning: Template QuantBot Config.ini.default missing at %s", quantTemplate.c_str());
+        quantBotOutOfSync = true;
+    } else if(!existsFile(quantUser)) {
+        SDL_Log("QuantBot Config.ini missing at %s", quantUser.c_str());
+        quantBotOutOfSync = true;
+    } else {
+        std::array<unsigned char, 16> templateDigest{};
+        std::array<unsigned char, 16> userDigest{};
+        if(!computeFileDigest(quantTemplate, templateDigest) || !computeFileDigest(quantUser, userDigest)) {
+            SDL_Log("Warning: Unable to compare QuantBot configuration files.");
+            quantBotOutOfSync = true;
+        } else if(templateDigest != userDigest) {
+            quantBotOutOfSync = true;
+        }
+    }
+
+    return objectDataOutOfSync || quantBotOutOfSync;
+}
+
+static bool copyTemplateFile(const std::string& templateRelativePath, const std::string& destinationPath)
+{
+    try {
+        auto rwSource = pFileManager->openFile(templateRelativePath);
+        if(!rwSource) {
+            SDL_Log("copyTemplateFile: failed to open template '%s'", templateRelativePath.c_str());
+            return false;
+        }
+
+        auto rwDest = sdl2::RWops_ptr{ SDL_RWFromFile(destinationPath.c_str(), "wb") };
+        if(!rwDest) {
+            SDL_Log("copyTemplateFile: failed to open destination '%s': %s", destinationPath.c_str(), SDL_GetError());
+            return false;
+        }
+
+        SDL_ClearError();
+        std::array<char, 4096> buffer{};
+
+        while(true) {
+            size_t bytesRead = SDL_RWread(rwSource.get(), buffer.data(), 1, buffer.size());
+            if(bytesRead == 0) {
+                const char* err = SDL_GetError();
+                if(err != nullptr && err[0] != '\0') {
+                    SDL_Log("copyTemplateFile: read error on '%s': %s", templateRelativePath.c_str(), err);
+                    return false;
+                }
+                break; // EOF
+            }
+
+            size_t bytesWritten = SDL_RWwrite(rwDest.get(), buffer.data(), 1, bytesRead);
+            if(bytesWritten != bytesRead) {
+                SDL_Log("copyTemplateFile: write error on '%s': %s", destinationPath.c_str(), SDL_GetError());
+                return false;
+            }
+        }
+
+        return true;
+    } catch(const std::exception& ex) {
+        SDL_Log("copyTemplateFile: exception while copying '%s' -> '%s': %s", templateRelativePath.c_str(), destinationPath.c_str(), ex.what());
+        return false;
+    }
+}
+
+std::string getDefaultPlayerName() {
+    char playername[MAX_PLAYERNAMELENGHT+1] = "Player";
+
+#ifdef _WIN32
+    DWORD playernameLength = MAX_PLAYERNAMELENGHT+1;
+    GetUserName(playername, &playernameLength);
+#else
+    struct passwd* pwent = getpwuid(getuid());
+
+    if(pwent != nullptr) {
+        strncpy(playername, pwent->pw_name, MAX_PLAYERNAMELENGHT + 1);
+        playername[MAX_PLAYERNAMELENGHT] = '\0';
+    }
+#endif
+
+    playername[0] = toupper(playername[0]);
+    return std::string(playername);
+}
+
+bool restoreDefaultConfigs() {
+    SDL_Log("========== RESTORING DEFAULT CONFIG FILES ==========");
+    
+    bool success = true;
+    
+    // Restore ObjectData.ini
+    {
+        try {
+            std::string userPath = getObjectDataConfigFilepath();
+            SDL_Log("Restoring ObjectData.ini to: %s", userPath.c_str());
+            
+            if (copyTemplateFile("config/ObjectData.ini.default", userPath)) {
+                SDL_Log("  ✓ ObjectData.ini restored successfully");
+            } else {
+                SDL_Log("  ✗ Failed to restore ObjectData.ini");
+                success = false;
+            }
+        } catch (std::exception& e) {
+            SDL_Log("  ✗ Error restoring ObjectData.ini: %s", e.what());
+            success = false;
+        }
+    }
+    
+    // Restore QuantBot Config.ini
+    {
+        try {
+            std::string userPath = getQuantBotConfigFilepath();
+            SDL_Log("Restoring QuantBot Config.ini to: %s", userPath.c_str());
+            
+            if (copyTemplateFile("config/QuantBot Config.ini.default", userPath)) {
+                SDL_Log("  ✓ QuantBot Config.ini restored successfully");
+            } else {
+                SDL_Log("  ✗ Failed to restore QuantBot Config.ini");
+                success = false;
+            }
+        } catch (std::exception& e) {
+            SDL_Log("  ✗ Error restoring QuantBot Config.ini: %s", e.what());
+            success = false;
+        }
+    }
+    
+    SDL_Log("====================================================");
+    return success;
+}
+
+static bool promptToRestoreOutOfSyncConfigurations()
+{
+    // With the mod system, vanilla mod is automatically seeded from templates
+    // by ModManager::initialize() -> vanillaNeedsReseed() -> seedVanillaFromDefaults()
+    // This legacy check is no longer needed.
+    return false;
+}
+
 void createDefaultConfigFile(const std::string& configfilepath, const std::string& language) {
-    SDL_Log("Creating config file '%s'", configfilepath.c_str());
+    SDL_Log("Creating user config file '%s'", configfilepath.c_str());
 
+    // Try to copy template file from config directory first
+    try {
+        auto templateFile = pFileManager->openFile("config/" + std::string(CONFIGFILENAME));
+        if (templateFile) {
+            SDL_Log("Copying template from game installation directory...");
+            INIFile templateINI(templateFile.get());
+            
+            // Set user-specific defaults
+            templateINI.setStringValue("General", "Player Name", getDefaultPlayerName());
+            templateINI.setStringValue("General", "Language", language);
+            
+            if (templateINI.saveChangesTo(configfilepath)) {
+                SDL_Log("User config file created from template successfully");
+                SDL_Log("  Template location: %s", getConfigTemplateFilepath().c_str());
+                SDL_Log("  User config location: %s", configfilepath.c_str());
+                return;
+            }
+        }
+    } catch (std::exception& e) {
+        SDL_Log("Warning: Could not copy template from config directory: %s", e.what());
+        SDL_Log("Falling back to programmatic creation...");
+    }
 
+    // Fallback: create programmatically in user directory
+    SDL_Log("Creating default config file in user directory: %s", configfilepath.c_str());
     auto file = sdl2::RWops_ptr{ SDL_RWFromFile(configfilepath.c_str(), "w") };
     if(!file) {
         THROW(sdl_error, "Opening config file failed: %s!", SDL_GetError());
@@ -280,7 +540,7 @@ void createDefaultConfigFile(const std::string& configfilepath, const std::strin
                                 "Physical Width = 640\n"
                                 "Physical Height = 480\n"
                                 "Fullscreen = true\n"
-                                "FrameLimit = true           # Limit the frame rate to save energy?\n"
+                                "FrameLimit = true           # Enable VSync for smooth, tear-free rendering.\n"
                                 "Preferred Zoom Level = 1    # 0 = no zooming, 1 = 2x, 2 = 3x\n"
                                 "Scaler = ScaleHD            # Scaler to use: ScaleHD = apply manual drawn mask to upscale, Scale2x = smooth edges, ScaleNN = nearest neighbour, \n"
                                 "RotateUnitGraphics = false  # Freely rotate unit graphics, e.g. carryall graphics\n"
@@ -289,7 +549,7 @@ void createDefaultConfigFile(const std::string& configfilepath, const std::strin
                                 "# There are three different possibilities to play music\n"
                                 "#  adl       - This option will use the Dune 2 music as used on e.g. SoundBlaster16 cards\n"
                                 "#  xmi       - This option plays the xmi files of Dune 2. Sounds more midi-like\n"
-                                "#  directory - Plays music from the \"music\"-directory inside your configuration directory\n"
+                                "#  directory - Plays music from the \"music\"-directory inside your game directory\n"
                                 "#              The \"music\"-directory should contain 5 subdirectories named attack, intro, peace, win and lose\n"
                                 "#              Put any mp3, ogg or mid file there and it will be played in the particular situation\n"
                                 "Music Type = adl\n"
@@ -317,25 +577,11 @@ void createDefaultConfigFile(const std::string& configfilepath, const std::strin
                                 "Sandworms Respawn = false               # If true, killed sandworms respawn after some time\n"
                                 "Killed Sandworms Drop Spice = false     # If true, killed sandworms drop some spice\n"
                                 "Manual Carryall Drops = false           # If true, player can request carryall to transport units\n"
-                                "Maximum Number of Units Override = -1   # Override the maximum number of units each house is allowed to build (-1 = do not override)\n";
-
-    char playername[MAX_PLAYERNAMELENGHT+1] = "Player";
-
-#ifdef _WIN32
-    DWORD playernameLength = MAX_PLAYERNAMELENGHT+1;
-    GetUserName(playername, &playernameLength);
-#else
-    struct passwd* pwent = getpwuid(getuid());
-
-    if(pwent != nullptr) {
-        strncpy(playername, pwent->pw_name, MAX_PLAYERNAMELENGHT + 1);
-        playername[MAX_PLAYERNAMELENGHT] = '\0';
-    }
-#endif
-
-    playername[0] = toupper(playername[0]);
+                                "Maximum Number of Units Override = 0    # Override the maximum number of units each house is allowed to build (-1 = use map default, 0 = unlimited, >0 = specific limit)\n"
+                                "Maximum Number of Harvesters Override = -1  # Override the maximum number of harvesters each house is allowed to build (-1 = use map size defaults from ObjectData.ini, >=0 = specific limit)\n";
 
     // replace player name, language, server port and metaserver
+    std::string playername = getDefaultPlayerName();
     std::string strConfigfile = fmt::sprintf(configfile, playername, language, DEFAULT_PORT, DEFAULT_METASERVER);
 
     if(SDL_RWwrite(file.get(), strConfigfile.c_str(), 1, strConfigfile.length()) == 0) {
@@ -508,6 +754,10 @@ int main(int argc, char *argv[]) {
             #endif
         }
 
+        // Install crash handlers early, after logging is set up
+        std::string crashLogPath = getLogFilepath();
+        installCrashHandlers(crashLogPath.c_str());
+
         SDL_Log("Starting Dune Legacy %s on %s", VERSION, SDL_GetPlatform());
 
         // First check for missing files
@@ -569,9 +819,21 @@ int main(int argc, char *argv[]) {
             settings.audio.musicVolume = myINIFile.getIntValue("Audio","Music Volume", 64);
             settings.audio.playSFX = myINIFile.getBoolValue("Audio","Play SFX", true);
             settings.audio.sfxVolume = myINIFile.getIntValue("Audio","SFX Volume", 64);
+            settings.audio.playCreditsSFX = myINIFile.getBoolValue("Audio","Play Credits SFX", true);
 
             settings.network.serverPort = myINIFile.getIntValue("Network","ServerPort",DEFAULT_PORT);
             settings.network.metaServer = myINIFile.getStringValue("Network","MetaServer",DEFAULT_METASERVER);
+            
+            // Migrate old SourceForge metaserver URL to new dunelegacy.com URL
+            if(settings.network.metaServer.find("dunelegacy.sourceforge.net") != std::string::npos) {
+                SDL_Log("Migrating old SourceForge metaserver URL to dunelegacy.com...");
+                size_t pos = settings.network.metaServer.find("dunelegacy.sourceforge.net");
+                settings.network.metaServer.replace(pos, strlen("dunelegacy.sourceforge.net"), "dunelegacy.com");
+                myINIFile.setStringValue("Network","MetaServer",settings.network.metaServer);
+                myINIFile.saveChangesTo(configfilepath);
+                SDL_Log("Metaserver URL updated to: %s", settings.network.metaServer.c_str());
+            }
+            
             settings.network.debugNetwork = myINIFile.getBoolValue("Network","Debug Network",false);
 
             settings.ai.campaignAI = myINIFile.getStringValue("AI","Campaign AI",DEFAULTAIPLAYERCLASS);
@@ -587,7 +849,9 @@ int main(int argc, char *argv[]) {
             settings.gameOptions.sandwormsRespawn = myINIFile.getBoolValue("Game Options","Sandworms Respawn",false);
             settings.gameOptions.killedSandwormsDropSpice = myINIFile.getBoolValue("Game Options","Killed Sandworms Drop Spice",false);
             settings.gameOptions.manualCarryallDrops = myINIFile.getBoolValue("Game Options","Manual Carryall Drops",false);
-            settings.gameOptions.maximumNumberOfUnitsOverride = myINIFile.getIntValue("Game Options","Maximum Number of Units Override",-1);
+            settings.gameOptions.maximumNumberOfUnitsOverride = myINIFile.getIntValue("Game Options","Maximum Number of Units Override",0);
+            settings.gameOptions.maximumNumberOfHarvestersOverride = myINIFile.getIntValue("Game Options","Maximum Number of Harvesters Override",-1);
+            settings.gameOptions.immortalHumanPlayer = myINIFile.getBoolValue("Game Options","Immortal Human Player",false);
 
             pTextManager = std::make_unique<TextManager>();
 
@@ -635,7 +899,8 @@ int main(int argc, char *argv[]) {
                 SDL_SetHint(SDL_HINT_VIDEO_ALLOW_SCREENSAVER, "0");
                 SDL_SetHint(SDL_HINT_VIDEO_HIGHDPI_DISABLED, "1");
                 SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-                SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
+                // VSync disabled by default - controlled via renderer flags in setVideoMode()
+                SDL_SetHint(SDL_HINT_RENDER_VSYNC, "0");
                 SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "0");  // Disable EGL
                 SDL_SetHint(SDL_HINT_RENDER_BATCHING, "1");      // Enable render batching
                 SDL_SetHint(SDL_HINT_RENDER_LINE_METHOD, "3");   // Best line rendering quality
@@ -696,86 +961,143 @@ int main(int argc, char *argv[]) {
 
             pFileManager = std::make_unique<FileManager>();
 
-            // now we can finish loading texts
-            pTextManager->loadData();
+            // Initialize the mod system (seeds vanilla mod from install defaults if needed)
+            SDL_Log("Initializing mod system...");
+            ModManager::instance().initialize();
 
-            palette = LoadPalette_RW(pFileManager->openFile("IBM.PAL").get());
+            // Initialize effective game options (base settings + mod overrides)
+            effectiveGameOptions = ModManager::instance().loadEffectiveGameOptions(settings.gameOptions);
+            SDL_Log("Effective game options initialized (active mod: %s)", 
+                    ModManager::instance().getActiveModName().c_str());
 
-            SDL_Log("Setting video mode...");
-            setVideoMode(currentDisplayIndex);
-            
-            // Give the renderer time to fully initialize
-            SDL_Delay(100);
-            
-            SDL_RendererInfo rendererInfo;
-            SDL_GetRendererInfo(renderer, &rendererInfo);
-            SDL_Log("Renderer: %s (max texture size: %dx%d)", rendererInfo.name, rendererInfo.max_texture_width, rendererInfo.max_texture_height);
-
-            // Verify renderer is valid before proceeding
-            if(renderer == nullptr) {
-                SDL_Log("Error: Renderer is null after setVideoMode!");
-                THROW(std::runtime_error, "Failed to create renderer during video mode initialization");
+            // Create user config files if they don't exist
+            // Check and copy ObjectData.ini
+            {
+                std::string userObjectDataPath = getObjectDataConfigFilepath();
+                if (!existsFile(userObjectDataPath)) {
+                    SDL_Log("ObjectData.ini not found in user directory, copying template...");
+                    try {
+                        if (copyTemplateFile("config/ObjectData.ini.default", userObjectDataPath)) {
+                            SDL_Log("ObjectData.ini created successfully at: %s", userObjectDataPath.c_str());
+                        } else {
+                            SDL_Log("Warning: Failed to create ObjectData.ini");
+                        }
+                    } catch (std::exception& e) {
+                        SDL_Log("Warning: Could not copy ObjectData.ini.default template: %s", e.what());
+                    }
+                }
             }
 
-            SDL_Log("Loading fonts...");
-            pFontManager = std::make_unique<FontManager>();
+            // Check and copy QuantBot Config.ini  
+            {
+                std::string userQuantBotPath = getQuantBotConfigFilepath();
+                if (!existsFile(userQuantBotPath)) {
+                    SDL_Log("QuantBot Config.ini not found in user directory, copying template...");
+                    try {
+                        if (copyTemplateFile("config/QuantBot Config.ini.default", userQuantBotPath)) {
+                            SDL_Log("QuantBot Config.ini created successfully at: %s", userQuantBotPath.c_str());
+                        } else {
+                            SDL_Log("Warning: Failed to create QuantBot Config.ini");
+                        }
+                    } catch (std::exception& e) {
+                        SDL_Log("Warning: Could not copy QuantBot Config.ini.default template: %s", e.what());
+                    }
+                }
+            }
 
-            SDL_Log("Loading graphics and sounds...");
+            bool abortIteration = false;
 
-#ifdef HAS_ASYNC
-            auto gfxManagerFut = std::async(std::launch::async, []() { return std::make_unique<GFXManager>(); } );
-            auto sfxManagerFut = std::async(std::launch::async, []() { return std::make_unique<SFXManager>(); } );
+            if(promptToRestoreOutOfSyncConfigurations()) {
+                SDL_Log("Default configuration restored. Exiting to allow restart.");
+                bExitGame = true;
+                abortIteration = true;
+            }
 
-            pGFXManager = gfxManagerFut.get();
-            pSFXManager = sfxManagerFut.get();
-#else
-            // g++ does not provide std::launch::async on all platforms
-            pGFXManager = std::make_unique<GFXManager>();
-            pSFXManager = std::make_unique<SFXManager>();
-#endif
+            if(!abortIteration) {
+                // now we can finish loading texts
+                pTextManager->loadData();
 
-            GUIStyle::setGUIStyle(std::make_unique<DuneStyle>());
+                palette = LoadPalette_RW(pFileManager->openFile("IBM.PAL").get());
 
-            if(bFirstInit == true) {
-                SDL_Log("Starting sound player...");
-                soundPlayer = std::make_unique<SoundPlayer>();
+                SDL_Log("Setting video mode...");
+                setVideoMode(currentDisplayIndex);
+                
+                // Give the renderer time to fully initialize
+                SDL_Delay(100);
+                
+                SDL_RendererInfo rendererInfo;
+                SDL_GetRendererInfo(renderer, &rendererInfo);
+                SDL_Log("Renderer: %s (max texture size: %dx%d)", rendererInfo.name, rendererInfo.max_texture_width, rendererInfo.max_texture_height);
 
-                if(settings.audio.musicType == "directory") {
-                    SDL_Log("Starting directory music player...");
-                    musicPlayer = std::make_unique<DirectoryPlayer>();
-                } else if(settings.audio.musicType == "adl") {
-                    SDL_Log("Starting ADL music player...");
-                    musicPlayer = std::make_unique<ADLPlayer>();
-                } else if(settings.audio.musicType == "xmi") {
-                    SDL_Log("Starting XMI music player...");
-                    musicPlayer = std::make_unique<XMIPlayer>();
-                } else {
-                    THROW(std::runtime_error, "Invalid music type: '%'", settings.audio.musicType);
+                // Verify renderer is valid before proceeding
+                if(renderer == nullptr) {
+                    SDL_Log("Error: Renderer is null after setVideoMode!");
+                    THROW(std::runtime_error, "Failed to create renderer during video mode initialization");
                 }
 
-                //musicPlayer->changeMusic(MUSIC_INTRO);
-            }
+                SDL_Log("Loading fonts...");
+                pFontManager = std::make_unique<FontManager>();
 
-            // Playing intro
-            if(((bFirstGamestart == true) || (settings.general.playIntro == true)) && (bFirstInit==true)) {
-                SDL_Log("Playing intro...");
-                Intro().run();
-            }
+                SDL_Log("Loading graphics and sounds...");
 
-            bFirstInit = false;
+#ifdef HAS_ASYNC
+                auto gfxManagerFut = std::async(std::launch::async, []() { return std::make_unique<GFXManager>(); } );
+                auto sfxManagerFut = std::async(std::launch::async, []() { return std::make_unique<SFXManager>(); } );
 
-            // Re-enable cursor for main menu (fixes Windows cursor visibility issue)
-            SDL_ShowCursor(SDL_ENABLE);
+                pGFXManager = gfxManagerFut.get();
+                pSFXManager = sfxManagerFut.get();
+#else
+                // g++ does not provide std::launch::async on all platforms
+                pGFXManager = std::make_unique<GFXManager>();
+                pSFXManager = std::make_unique<SFXManager>();
+#endif
 
-            SDL_Log("Starting main menu...");
-            { // Scope
-                int menuResult = MainMenu().showMenu();
-                if (menuResult == MENU_QUIT_DEFAULT) {
-                    bExitGame = true;
-                } else if (menuResult == MENU_QUIT_REINITIALIZE) {
-                    // Reinitialize video mode and continue the loop
-                    SDL_Log("Reinitializing video mode...");
-                    // The loop will continue and reinitialize everything
+                GUIStyle::setGUIStyle(std::make_unique<DuneStyle>());
+
+                if(bFirstInit == true) {
+                    SDL_Log("Starting sound player...");
+                    soundPlayer = std::make_unique<SoundPlayer>();
+
+                    if(settings.audio.musicType == "directory") {
+                        SDL_Log("Starting directory music player...");
+                        musicPlayer = std::make_unique<DirectoryPlayer>();
+                    } else if(settings.audio.musicType == "adl") {
+                        SDL_Log("Starting ADL music player...");
+                        musicPlayer = std::make_unique<ADLPlayer>();
+                    } else if(settings.audio.musicType == "xmi") {
+                        SDL_Log("Starting XMI music player...");
+                        musicPlayer = std::make_unique<XMIPlayer>();
+                    } else {
+                        THROW(std::runtime_error, "Invalid music type: '%'", settings.audio.musicType);
+                    }
+
+                    //musicPlayer->changeMusic(MUSIC_INTRO);
+                }
+
+                // Playing intro
+                if(((bFirstGamestart == true) || (settings.general.playIntro == true)) && (bFirstInit==true)) {
+                    SDL_Log("Playing intro...");
+                    Intro().run();
+                }
+
+                bFirstInit = false;
+
+                // Re-enable cursor for main menu (fixes Windows cursor visibility issue)
+                SDL_ShowCursor(SDL_ENABLE);
+
+                // Initialize Discord Rich Presence
+                DiscordManager::instance().initialize();
+
+                SDL_Log("Starting main menu...");
+                { // Scope
+                    int menuResult = MainMenu().showMenu();
+                    if (menuResult == MENU_QUIT_DEFAULT) {
+                        bExitGame = true;
+                    } else if (menuResult == MENU_QUIT_REINITIALIZE) {
+                        // Reinitialize video mode and continue the loop
+                        SDL_Log("Reinitializing video mode...");
+                        // The loop will continue and reinitialize everything
+                    }
                 }
             }
 
@@ -821,6 +1143,7 @@ int main(int argc, char *argv[]) {
             }
 
             if(bExitGame == true) {
+                DiscordManager::instance().shutdown();
                 TTF_Quit();
                 SDL_Quit();
             }

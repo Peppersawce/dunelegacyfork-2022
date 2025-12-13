@@ -18,6 +18,7 @@
 #include <Network/MetaServerClient.h>
 
 #include <Network/ENetHttp.h>
+#include <Network/ENetHelper.h>
 
 #include <misc/string_util.h>
 #include <misc/exceptions.h>
@@ -28,6 +29,42 @@
 #include <sstream>
 #include <iostream>
 #include <map>
+
+// Helper function to get local IP address
+static std::string getLocalIPAddress() {
+    // Get local IP by checking which interface would be used to reach the internet
+    // We create a UDP socket and "connect" to a public IP (doesn't send data)
+    ENetSocket socket = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
+    if (socket == ENET_SOCKET_NULL) {
+        SDL_Log("getLocalIPAddress: Failed to create socket");
+        return "";
+    }
+    
+    // "Connect" to Google's DNS (8.8.8.8) - this doesn't send data but tells
+    // the OS to select the appropriate network interface for routing
+    ENetAddress remoteAddress;
+    enet_address_set_host(&remoteAddress, "8.8.8.8");
+    remoteAddress.port = 53;
+    
+    if (enet_socket_connect(socket, &remoteAddress) < 0) {
+        SDL_Log("getLocalIPAddress: Failed to connect socket for routing check");
+        enet_socket_destroy(socket);
+        return "";
+    }
+    
+    // Get the local address that was selected for this connection
+    ENetAddress localAddress;
+    if (enet_socket_get_address(socket, &localAddress) == 0) {
+        std::string localIP = Address2String(localAddress);
+        enet_socket_destroy(socket);
+        SDL_Log("getLocalIPAddress: Detected local IP: %s", localIP.c_str());
+        return localIP;
+    }
+    
+    SDL_Log("getLocalIPAddress: Failed to get local address from socket");
+    enet_socket_destroy(socket);
+    return "";
+}
 
 
 MetaServerClient::MetaServerClient(const std::string& metaServerURL)
@@ -64,7 +101,8 @@ MetaServerClient::~MetaServerClient() {
 }
 
 
-void MetaServerClient::startAnnounce(const std::string& serverName, int serverPort, const std::string& mapName, Uint8 numPlayers, Uint8 maxPlayers) {
+void MetaServerClient::startAnnounce(const std::string& serverName, int serverPort, const std::string& mapName, Uint8 numPlayers, Uint8 maxPlayers,
+                                     const std::string& modName, const std::string& modVersion) {
 
     stopAnnounce();
 
@@ -74,8 +112,10 @@ void MetaServerClient::startAnnounce(const std::string& serverName, int serverPo
     this->mapName = mapName;
     this->numPlayers = numPlayers;
     this->maxPlayers = maxPlayers;
+    this->modName = modName;
+    this->modVersion = modVersion;
 
-    enqueueMetaServerCommand(std::make_unique<MetaServerAdd>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers));
+    enqueueMetaServerCommand(std::make_unique<MetaServerAdd>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers, modName, modVersion));
     lastAnnounceUpdate = SDL_GetTicks();
 }
 
@@ -83,7 +123,7 @@ void MetaServerClient::startAnnounce(const std::string& serverName, int serverPo
 void MetaServerClient::updateAnnounce(Uint8 numPlayers) {
     if(serverPort > 0) {
         this->numPlayers = numPlayers;
-        enqueueMetaServerCommand(std::make_unique<MetaServerUpdate>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers));
+        enqueueMetaServerCommand(std::make_unique<MetaServerUpdate>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers, modName, modVersion));
         lastAnnounceUpdate = SDL_GetTicks();
     }
 }
@@ -100,6 +140,8 @@ void MetaServerClient::stopAnnounce() {
         mapName = "";
         numPlayers = 0;
         maxPlayers = 0;
+        modName = "vanilla";
+        modVersion = "";
     }
 }
 
@@ -118,7 +160,7 @@ void MetaServerClient::update() {
 
     if(serverPort != 0) {
         if(SDL_GetTicks() - lastAnnounceUpdate > GAMESERVER_UPDATE_INTERVAL) {
-            enqueueMetaServerCommand(std::make_unique<MetaServerUpdate>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers));
+            enqueueMetaServerCommand(std::make_unique<MetaServerUpdate>(serverName, serverPort, secret, mapName, numPlayers, maxPlayers, modName, modVersion));
             lastAnnounceUpdate = SDL_GetTicks();
         }
     }
@@ -247,6 +289,16 @@ int MetaServerClient::connectionThreadMain(void* data) {
                     parameters["numplayers"] = std::to_string(pMetaServerAdd->numPlayers);
                     parameters["maxplayers"] = std::to_string(pMetaServerAdd->maxPlayers);
                     parameters["pwdprotected"] = "false";
+                    parameters["modname"] = pMetaServerAdd->modName;
+                    parameters["modversion"] = pMetaServerAdd->modVersion;
+                    
+                    // Add local IP for NAT traversal (allows clients on same LAN to connect directly)
+                    std::string localIP = getLocalIPAddress();
+                    if (!localIP.empty()) {
+                        parameters["localip"] = localIP;
+                        SDL_Log("Announcing game with local IP: %s, mod: %s v%s", localIP.c_str(), 
+                                pMetaServerAdd->modName.c_str(), pMetaServerAdd->modVersion.c_str());
+                    }
 
                     std::string result;
 
@@ -298,6 +350,8 @@ int MetaServerClient::connectionThreadMain(void* data) {
                         parameters["mapname"] = pMetaServerUpdate->mapName;
                         parameters["maxplayers"] = std::to_string(pMetaServerUpdate->maxPlayers);
                         parameters["pwdprotected"] = "false";
+                        parameters["modname"] = pMetaServerUpdate->modName;
+                        parameters["modversion"] = pMetaServerUpdate->modVersion;
 
                         std::string result2;
 
@@ -379,7 +433,12 @@ int MetaServerClient::connectionThreadMain(void* data) {
 
                             std::vector<std::string> parts = splitStringToStringVector(completeLine, "\\t");
 
-                            if(parts.size() != 9) {
+                            // Support formats:
+                            // - Old: 9 fields (no localIP, no mod)
+                            // - Intermediate: 10 fields (with localIP, no mod)
+                            // - New: 11 fields (with localIP, modname, empty modversion - trailing field dropped by regex)
+                            // - New: 12 fields (with localIP, modname, modversion)
+                            if(parts.size() < 9 || parts.size() > 12) {
                                 break;
                             }
 
@@ -410,6 +469,26 @@ int MetaServerClient::connectionThreadMain(void* data) {
                             if(!parseString(parts[8], gameServerInfo.lastUpdate)) {
                                 continue;
                             }
+                            
+                            // Parse local IP if available (10th field)
+                            if(parts.size() >= 10 && !parts[9].empty()) {
+                                gameServerInfo.localIP = parts[9];
+                                enet_address_set_host(&gameServerInfo.localAddress, parts[9].c_str());
+                                gameServerInfo.localAddress.port = static_cast<Uint16>(port);
+                            } else {
+                                gameServerInfo.localIP = "";
+                                gameServerInfo.localAddress.host = 0;
+                                gameServerInfo.localAddress.port = 0;
+                            }
+                            
+                            // Parse mod info if available (11th and 12th fields)
+                            if(parts.size() >= 11) {
+                                gameServerInfo.modName = parts[10];
+                                gameServerInfo.modVersion = (parts.size() >= 12) ? parts[11] : "";
+                            } else {
+                                gameServerInfo.modName = "vanilla";
+                                gameServerInfo.modVersion = "";
+                            }
 
                             if(resultstream.good() == false) {
                                 break;
@@ -423,7 +502,6 @@ int MetaServerClient::connectionThreadMain(void* data) {
 
                     } else {
                         const std::string errorMsg = result.substr(result.find_first_not_of("\x0D\x0A",5), std::string::npos);
-
                         pMetaServerClient->setErrorMessage(METASERVERCOMMAND_LIST, errorMsg);
                     }
 

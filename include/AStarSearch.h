@@ -23,6 +23,7 @@
 
 #include <list>
 #include <vector>
+#include <array>
 
 class UnitBase;
 class Map;
@@ -58,6 +59,18 @@ public:
 
         return path;
     };
+
+    int getNodesChecked() const { return numNodesChecked; }
+
+    struct PoolUsageStats {
+        size_t reuseHits = 0;
+        size_t bufferExpansions = 0;
+        size_t fallbackAllocs = 0;
+        size_t buffersInUse = 0;
+        size_t totalBuffers = 0;
+    };
+
+    static PoolUsageStats getPoolUsageStats();
 
 private:
     struct TileData {
@@ -183,9 +196,23 @@ private:
 
     int sizeX;
     int sizeY;
+    int numNodesChecked;
     Coord bestCoord;
     TileData* mapData;
     std::vector<Coord> openList;
+
+    static constexpr size_t TilePoolSize = 8;
+
+    struct TilePoolEntry {
+        TileData* buffer = nullptr;
+        size_t capacity = 0;
+        bool inUse = false;
+    };
+
+    static std::array<TilePoolEntry, TilePoolSize> tilePool;
+
+    static TileData* acquireTileBuffer(size_t requiredCount);
+    static void releaseTileBuffer(TileData* buffer);
 };
 
 #endif //ASTARSEARCH_H

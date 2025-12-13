@@ -27,10 +27,10 @@
 #define AUDIO_FREQUENCY     44100
 
 #define DEFAULT_PORT        28747
-#define DEFAULT_METASERVER  "http://dunelegacy.sourceforge.net/metaserver/metaserver.php"
+#define DEFAULT_METASERVER  "https://dunelegacy.com/metaserver/metaserver.php"
 
 #define SAVEMAGIC           8675309
-#define SAVEGAMEVERSION     9704
+#define SAVEGAMEVERSION     9806  // Incremented for mod tagging (modName, modChecksum in save header)
 
 #define MAX_PLAYERNAMELENGHT    24
 
@@ -39,7 +39,7 @@
 
 #define GAMESPEED_MAX 32
 #define GAMESPEED_MIN 8
-#define GAMESPEED_DEFAULT 16
+#define GAMESPEED_DEFAULT 16  // 16ms per cycle = default game speed (matches 0.97.5)
 #define MILLI2CYCLES(MILLISECONDS) ((MILLISECONDS)/GAMESPEED_DEFAULT)   // this is calculated in game milliseconds (dune 2 has about the same in game speed "fastest")
 #define VOLUME_MAX 100
 #define VOLUME_MIN 0
@@ -51,8 +51,8 @@
 #define WINLOSEFLAGS_QUOTA                  0x04
 #define WINLOSEFLAGS_TIMEOUT                0x08
 
-#define MAX_XSIZE 256
-#define MAX_YSIZE 256
+#define MAX_XSIZE 512
+#define MAX_YSIZE 512
 
 #define BUILDRANGE 2
 #define MIN_CARRYALL_LIFT_DISTANCE 6
@@ -92,7 +92,7 @@
 #define DEFAULT_STARTINGCREDITS 3000
 
 #define HUMANPLAYERCLASS        "HumanPlayer"
-#define DEFAULTAIPLAYERCLASS    "qBotMedium"
+#define DEFAULTAIPLAYERCLASS    "CampaignAIPlayer"
 
 
 #ifndef RESTRICT

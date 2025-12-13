@@ -43,6 +43,9 @@ void RocketTurret::init() {
     owner->incrementStructures(itemID);
 
     attackSound = Sound_Rocket;
+    // Use Bullet_TurretRocket with Dynasty speed (20.48)
+    // Ornithopters run at 19.2, so turret rockets stay faster
+    // Added safety detonation timer to Bullet_TurretRocket as backup
     bulletType = Bullet_TurretRocket;
 
     graphicID = ObjPic_RocketTurret;
@@ -91,7 +94,12 @@ void RocketTurret::attack() {
                 weaponTimer = currentGame->objectData.data[Structure_GunTurret][originalHouseID].weaponreloadtime;
             }
         } else {
-            // we are in normal shooting mode
+            // MULTIPLAYER-SAFE: Track turret rocket firing
+            if(pObject->getItemID() == Unit_Ornithopter) {
+                currentGame->combatStats.rocketTurretFiresOnOrni++;
+                currentGame->combatStats.turretRocketsSpawned++;
+            }
+            
             bulletList.push_back( new Bullet( objectID, &centerPoint, &targetCenterPoint, bulletType,
                                                    currentGame->objectData.data[itemID][originalHouseID].weapondamage,
                                                    pObject->isAFlyingUnit(),
@@ -101,6 +109,10 @@ void RocketTurret::attack() {
             soundPlayer->playSoundAt(attackSound, location);
             weaponTimer = getWeaponReloadTime();
         }
-
+    } else if((weaponTimer != 0) && (target.getObjPointer() != nullptr)) {
+        // MULTIPLAYER-SAFE: Track when weapon timer blocks firing
+        if(target.getObjPointer()->getItemID() == Unit_Ornithopter) {
+            currentGame->combatStats.rocketTurretFireBlocked++;
+        }
     }
 }

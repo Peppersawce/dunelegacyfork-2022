@@ -48,7 +48,7 @@ OptionsMenu::OptionsMenu() : MenuBase()
     std::list<std::string> languagesList = getFileNamesList(getDuneLegacyDataDir() + "/locale", "po", true, FileListOrder_Name_Asc);
     availLanguages = std::vector<std::string>(languagesList.begin(), languagesList.end());
 
-    currentGameOptions = settings.gameOptions;
+    currentGameOptions = effectiveGameOptions;  // Use mod-aware effective options
 
     // set up window
     SDL_Texture *pBackground = pGFXManager->getUIGraphic(UI_MenuBackground);
@@ -109,10 +109,28 @@ OptionsMenu::OptionsMenu() : MenuBase()
 
     generalHBox.addWidget(Spacer::create(), 0.5);
     generalHBox.addWidget(Label::create(_("Campaign AI")), 190);
+    int visibleIndex = 0;
+    int selectedVisibleIndex = -1;
     for(unsigned int i=1; i<PlayerFactory::getList().size(); i++) {
-        aiDropDownBox.addEntry(PlayerFactory::getByIndex(i)->getName(), i);
+        const PlayerFactory::PlayerData* playerData = PlayerFactory::getByIndex(i);
+        if(playerData == nullptr) {
+            continue;
+        }
+        const std::string& playerClass = playerData->getPlayerClass();
+        if(playerClass.rfind("qBotSupport", 0) == 0) {
+            continue;
+        }
+        aiDropDownBox.addEntry(playerData->getName(), i);
+        if(playerClass == settings.ai.campaignAI) {
+            selectedVisibleIndex = visibleIndex;
+        }
+        visibleIndex++;
     }
-    aiDropDownBox.setSelectedItem(PlayerFactory::getIndexByPlayerClass(settings.ai.campaignAI) - 1);
+    if(selectedVisibleIndex >= 0) {
+        aiDropDownBox.setSelectedItem(selectedVisibleIndex);
+    } else if(visibleIndex > 0) {
+        aiDropDownBox.setSelectedItem(0);
+    }
     aiDropDownBox.setOnSelectionChange(std::bind(&OptionsMenu::onChangeOption, this, std::placeholders::_1));
     generalHBox.addWidget(&aiDropDownBox, 140);
     generalHBox.addWidget(Spacer::create(), 20);
@@ -170,11 +188,15 @@ OptionsMenu::OptionsMenu() : MenuBase()
     fullScreenCheckbox.setText(_("Full Screen"));
     fullScreenCheckbox.setChecked(settings.video.fullscreen);
     fullScreenCheckbox.setOnClick(std::bind(&OptionsMenu::onChangeOption, this, true));
-    videoHBox.addWidget(&fullScreenCheckbox, 240);
+    videoHBox.addWidget(&fullScreenCheckbox, 155);
+    frameLimitCheckbox.setText(_("Enable VSync"));
+    frameLimitCheckbox.setChecked(settings.video.frameLimit);
+    frameLimitCheckbox.setOnClick(std::bind(&OptionsMenu::onChangeOption, this, true));
+    videoHBox.addWidget(&frameLimitCheckbox, 155);
     showTutorialHintsCheckbox.setText(_("Show Tutorial Hints"));
     showTutorialHintsCheckbox.setChecked(settings.general.showTutorialHints);
     showTutorialHintsCheckbox.setOnClick(std::bind(&OptionsMenu::onChangeOption, this, true));
-    videoHBox.addWidget(&showTutorialHintsCheckbox, 240);
+    videoHBox.addWidget(&showTutorialHintsCheckbox, 155);
     videoHBox.addWidget(Spacer::create(), 0.5);
 
     mainVBox.addWidget(&videoHBox, 0.01);
@@ -193,6 +215,16 @@ OptionsMenu::OptionsMenu() : MenuBase()
     audioHBox.addWidget(Spacer::create(), 0.5);
 
     mainVBox.addWidget(&audioHBox, 0.01);
+
+    audioHBox2.addWidget(Spacer::create(), 0.5);
+    playCreditsSFXCheckbox.setText(_("Play Credits SFX"));
+    playCreditsSFXCheckbox.setChecked(settings.audio.playCreditsSFX);
+    playCreditsSFXCheckbox.setOnClick(std::bind(&OptionsMenu::onChangeOption, this, true));
+    audioHBox2.addWidget(&playCreditsSFXCheckbox, 240);
+    audioHBox2.addWidget(Spacer::create(), 240);
+    audioHBox2.addWidget(Spacer::create(), 0.5);
+
+    mainVBox.addWidget(&audioHBox2, 0.01);
 
     mainVBox.addWidget(Spacer::create(), 0.2);
 
@@ -216,6 +248,15 @@ OptionsMenu::OptionsMenu() : MenuBase()
     metaServerTextBox.setText(settings.network.metaServer);
     networkMetaServerHBox.addWidget(Spacer::create(), 0.5);
     mainVBox.addWidget(&networkMetaServerHBox, 0.01);
+
+    mainVBox.addWidget(VSpacer::create(10));
+
+    restoreDefaultsHBox.addWidget(Spacer::create(), 0.5);
+    restoreDefaultsButton.setText(_("Restore Config Defaults"));
+    restoreDefaultsButton.setOnClick(std::bind(&OptionsMenu::onRestoreDefaults, this));
+    restoreDefaultsHBox.addWidget(&restoreDefaultsButton, 320);
+    restoreDefaultsHBox.addWidget(Spacer::create(), 0.5);
+    mainVBox.addWidget(&restoreDefaultsHBox, 0.01);
 
     mainVBox.addWidget(Spacer::create(), 0.2);
 
@@ -265,10 +306,12 @@ void OptionsMenu::onChangeOption(bool bInteractive) {
     }
     bChanged |= (settings.video.preferredZoomLevel != zoomlevelDropDownBox.getSelectedEntryIntData());
     bChanged |= (settings.video.fullscreen != fullScreenCheckbox.isChecked());
+    bChanged |= (settings.video.frameLimit != frameLimitCheckbox.isChecked());
     bChanged |= (settings.video.scaler != scalerDropDownBox.getSelectedEntry());
 
     bChanged |= (settings.audio.playSFX != playSFXCheckbox.isChecked());
     bChanged |= (settings.audio.playMusic != playMusicCheckbox.isChecked());
+    bChanged |= (settings.audio.playCreditsSFX != playCreditsSFXCheckbox.isChecked());
 
     bChanged |= (settings.gameOptions != currentGameOptions);
 
@@ -331,9 +374,11 @@ void OptionsMenu::onOptionsOK() {
     settings.video.preferredZoomLevel = zoomlevelDropDownBox.getSelectedEntryIntData();
     settings.video.scaler = scalerDropDownBox.getSelectedEntry();
     settings.video.fullscreen = fullScreenCheckbox.isChecked();
+    settings.video.frameLimit = frameLimitCheckbox.isChecked();
 
     settings.audio.playSFX = playSFXCheckbox.isChecked();
     settings.audio.playMusic = playMusicCheckbox.isChecked();
+    settings.audio.playCreditsSFX = playCreditsSFXCheckbox.isChecked();
 
     settings.gameOptions = currentGameOptions;
 
@@ -361,6 +406,27 @@ void OptionsMenu::onGameOptions() {
     openWindow(GameOptionsWindow::create(currentGameOptions));
 }
 
+void OptionsMenu::onRestoreDefaults() {
+    // Restore config files
+    if (restoreDefaultConfigs()) {
+        std::string successMessage = 
+            "Config files restored successfully!\n\n"
+            "ObjectData.ini and QuantBot Config.ini have been\n"
+            "reset to default values.\n\n"
+            "IMPORTANT: Changes will take effect on next game start.\n"
+            "Please restart the game.";
+        MsgBox* pMsgBox = MsgBox::create(successMessage);
+        openWindow(pMsgBox);
+    } else {
+        std::string errorMessage = 
+            "ERROR: Failed to restore config files!\n\n"
+            "Check the log file for details.";
+        MsgBox* pMsgBox = MsgBox::create(errorMessage);
+        pMsgBox->setTextColor(COLOR_RED);
+        openWindow(pMsgBox);
+    }
+}
+
 void OptionsMenu::saveConfiguration2File() {
     INIFile myINIFile(getConfigFilepath());
 
@@ -372,6 +438,7 @@ void OptionsMenu::saveConfiguration2File() {
     myINIFile.setIntValue("Video","Width",settings.video.width);
     myINIFile.setIntValue("Video","Height",settings.video.height);
     myINIFile.setBoolValue("Video","Fullscreen",settings.video.fullscreen);
+    myINIFile.setBoolValue("Video","FrameLimit",settings.video.frameLimit);
     myINIFile.setIntValue("Video","Preferred Zoom Level",settings.video.preferredZoomLevel);
     myINIFile.setStringValue("Video","Scaler",settings.video.scaler);
     myINIFile.setBoolValue("Video","RotateUnitGraphics",settings.video.rotateUnitGraphics);
@@ -383,6 +450,7 @@ void OptionsMenu::saveConfiguration2File() {
 
     myINIFile.setBoolValue("Audio","Play SFX",settings.audio.playSFX);
     myINIFile.setBoolValue("Audio","Play Music",settings.audio.playMusic);
+    myINIFile.setBoolValue("Audio","Play Credits SFX",settings.audio.playCreditsSFX);
 
     myINIFile.setIntValue("Game Options","Game Speed",settings.gameOptions.gameSpeed);
     myINIFile.setBoolValue("Game Options","Concrete Required",settings.gameOptions.concreteRequired);
@@ -396,6 +464,8 @@ void OptionsMenu::saveConfiguration2File() {
     myINIFile.setBoolValue("Game Options","Killed Sandworms Drop Spice",settings.gameOptions.killedSandwormsDropSpice);
     myINIFile.setBoolValue("Game Options","Manual Carryall Drops",settings.gameOptions.manualCarryallDrops);
     myINIFile.setIntValue("Game Options","Maximum Number of Units Override",settings.gameOptions.maximumNumberOfUnitsOverride);
+    myINIFile.setIntValue("Game Options","Maximum Number of Harvesters Override",settings.gameOptions.maximumNumberOfHarvestersOverride);
+    myINIFile.setBoolValue("Game Options","Immortal Human Player",settings.gameOptions.immortalHumanPlayer);
 
     myINIFile.setIntValue("Network","ServerPort",settings.network.serverPort);
     myINIFile.setStringValue("Network","MetaServer",settings.network.metaServer);

@@ -28,6 +28,7 @@
 #include <structures/BuilderBase.h>
 #include <structures/StarPort.h>
 #include <structures/ConstructionYard.h>
+#include <structures/Palace.h>
 #include <units/UnitBase.h>
 #include <units/MCV.h>
 #include <units/Harvester.h>
@@ -38,8 +39,13 @@
 
 AIPlayer::AIPlayer(House* associatedHouse, const std::string& playername, Difficulty difficulty)
  : Player(associatedHouse, playername), difficulty(difficulty) {
-    attackTimer = ((2-static_cast<Uint8>(difficulty)) * MILLI2CYCLES(2*60*1000)) + getRandomGen().rand(MILLI2CYCLES(8*60*1000), MILLI2CYCLES(11*60*1000));
-    buildTimer = getRandomGen().rand(0,3) * 50;
+    // MULTIPLAYER FIX (Issue #4): Deterministic timer initialization
+    // Use house ID to ensure all clients get same initial values
+    const int houseID = static_cast<int>(associatedHouse->getHouseID());
+    const int baseAttackDelay = ((2-static_cast<Uint8>(difficulty)) * MILLI2CYCLES(2*60*1000));
+    const int attackVariance = MILLI2CYCLES(30*1000);  // 30s per house
+    attackTimer = baseAttackDelay + MILLI2CYCLES(9*60*1000) + (houseID * attackVariance);
+    buildTimer = (houseID % 4) * 50;  // 0, 50, 100, or 150 cycles
 }
 
 AIPlayer::AIPlayer(InputStream& stream, House* associatedHouse) : Player(stream, associatedHouse) {
@@ -193,9 +199,17 @@ Coord AIPlayer::findPlaceLocation(Uint32 itemID) {
     FixPoint bestrating = 0;
     Coord bestLocation = Coord::Invalid();
     int count = 0;
+    
+    // MULTIPLAYER FIX (Issue #4): Deterministic placement search
+    // Use house ID + itemID to ensure all clients search same locations
+    const int houseID = static_cast<int>(getHouse()->getHouseID());
+    const int rangeX = maxX - minX + 1;
+    const int rangeY = maxY - minY + 1;
+    
     do {
-        int x = getRandomGen().rand(minX, maxX);
-        int y = getRandomGen().rand(minY, maxY);
+        // Deterministic pseudo-random coordinates based on house ID, item ID, and iteration
+        int x = minX + ((houseID + itemID + count) % rangeX);
+        int y = minY + ((houseID + itemID + count + 1) % rangeY);
 
         Coord pos = Coord(x, y);
 
@@ -338,6 +352,40 @@ void AIPlayer::build() {
     for(const StructureBase* pStructure : getStructureList()) {
         //if this players structure, and its a heavy factory, build something
         if(pStructure->getOwner() == getHouse()) {
+
+            if(pStructure->getItemID() == Structure_Palace) {
+                const Palace* pPalace = static_cast<const Palace*>(pStructure);
+                if(pPalace->isSpecialWeaponReady()) {
+                    const HOUSETYPE palaceHouse = static_cast<HOUSETYPE>(pPalace->getOriginalHouseID());
+                    if(palaceHouse == HOUSE_HARKONNEN || palaceHouse == HOUSE_SARDAUKAR) {
+                        const House* pBestHouse = nullptr;
+                        for(int i = 0; i < NUM_HOUSES; i++) {
+                            const House* pHouse = getHouse(i);
+                            if(!pHouse || pHouse->getTeamID() == getHouse()->getTeamID()) {
+                                continue;
+                            }
+
+                            if(!pBestHouse) {
+                                pBestHouse = pHouse;
+                            } else if(pHouse->getNumStructures() > pBestHouse->getNumStructures()) {
+                                pBestHouse = pHouse;
+                            } else if(pBestHouse->getNumStructures() == 0 && (pHouse->getNumUnits() > pBestHouse->getNumUnits())) {
+                                pBestHouse = pHouse;
+                            }
+                        }
+
+                        if(pBestHouse) {
+                            Coord target = pBestHouse->getNumStructures() > 0 ? pBestHouse->getCenterOfMainBase() : pBestHouse->getStrongestUnitPosition();
+                            if(target.isValid()) {
+                                doLaunchDeathhand(pPalace, target.x, target.y);
+                            }
+                        }
+                    } else {
+                        doSpecialWeapon(pPalace);
+                    }
+                }
+                continue;
+            }
 
             if((pStructure->isRepairing() == false) && (pStructure->getHealth() < pStructure->getMaxHealth())) {
                 doRepair(pStructure);
@@ -615,7 +663,8 @@ void AIPlayer::build() {
 
     }
 
-    buildTimer = getRandomGen().rand(0,3)*50;
+    // MULTIPLAYER FIX (Issue #4): Deterministic build timer
+    buildTimer = (getHouse()->getHouseID() % 4) * 50;
 }
 
 void AIPlayer::attack() {
@@ -656,8 +705,11 @@ void AIPlayer::attack() {
         }
     }
 
-    //reset timer for next attack
-    attackTimer = getRandomGen().rand(10000, 20000);
+    // MULTIPLAYER FIX (Issue #4): Deterministic attack timer
+    // Use game cycle to create variation while staying deterministic
+    const int baseTimer = 15000;  // 15 seconds base
+    const int houseOffset = static_cast<int>(getHouse()->getHouseID()) * 1000;
+    attackTimer = baseTimer + houseOffset;
 }
 
 void AIPlayer::checkAllUnits() {

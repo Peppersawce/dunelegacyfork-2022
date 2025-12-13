@@ -46,6 +46,7 @@ private:
     void    onOptionsOK();
     void    onOptionsCancel();
     void    onGameOptions();
+    void    onRestoreDefaults();
 
     void    saveConfiguration2File();
 
@@ -85,16 +86,22 @@ private:
     DropDownBox scalerDropDownBox;
     HBox        videoHBox;
     Checkbox    fullScreenCheckbox;
+    Checkbox    frameLimitCheckbox;
     Checkbox    showTutorialHintsCheckbox;
 
     HBox        audioHBox;
     Checkbox    playSFXCheckbox;
     Checkbox    playMusicCheckbox;
+    HBox        audioHBox2;
+    Checkbox    playCreditsSFXCheckbox;
 
     HBox        networkPortHBox;
     TextBox     portTextBox;
     HBox        networkMetaServerHBox;
     TextBox     metaServerTextBox;
+
+    HBox        restoreDefaultsHBox;
+    TextButton  restoreDefaultsButton;
 
     HBox        okCancelHBox;
     TextButton  acceptButton;

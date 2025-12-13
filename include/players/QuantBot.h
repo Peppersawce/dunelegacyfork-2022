@@ -20,8 +20,11 @@
 
 #include <players/Player.h>
 #include <units/MCV.h>
+#include <players/QuantBotConfig.h>
 
 #include <DataTypes.h>
+#include <set>
+#include <map>
 
 class QuantBot : public Player
 {
@@ -39,7 +42,7 @@ public:
         Campaign = 5
     };
 
-    QuantBot(House* associatedHouse, const std::string& playername, Difficulty difficulty);
+    QuantBot(House* associatedHouse, const std::string& playername, Difficulty difficulty, bool supportModeEnabled = false);
     QuantBot(InputStream& stream, House* associatedHouse);
     void init();
     ~QuantBot();
@@ -55,6 +58,27 @@ public:
 
 private:
 
+    struct OrnithopterStrikeTeam {
+        int minMembers = 0;
+        Uint32 targetId = 0;
+        std::set<Uint32> memberIds;
+
+        bool isActive() const {
+            return targetId != 0 && !memberIds.empty();
+        }
+
+        void reset() {
+            minMembers = 0;
+            targetId = 0;
+            memberIds.clear();
+        }
+
+        void setTarget(Uint32 newTargetId, int requiredMembers) {
+            targetId = newTargetId;
+            minMembers = requiredMembers;
+        }
+    };
+
     Difficulty difficulty;  ///< difficulty level
     GameMode  gameMode;     ///< game mode (custom or campaign)
     Sint32  buildTimer;     ///< When to build the next structure/unit
@@ -65,21 +89,38 @@ private:
     int initialMilitaryValue = 0;
     int militaryValueLimit = 0;
     int harvesterLimit = 4;
+    int lastCalculatedSpice = 0;
     bool campaignAIAttackFlag = false;
     Coord squadRallyLocation = Coord::Invalid();
     Coord squadRetreatLocation = Coord::Invalid();
+    bool supportMode = false;
+    Uint32 lastStatsLogCycle = 0;
+    
+    std::map<Uint32, int> idleHarvesterCounters; ///< Track idle time for each harvester (objectID -> cycle count)
+    std::map<Uint32, int> harvesterMovingCounters; ///< Track continuous movement time (objectID -> cycle count)
 
     void scrambleUnitsAndDefend(const ObjectBase* pIntruder, int numUnits = std::numeric_limits<int>::max());
 
 
     Coord findMcvPlaceLocation(const MCV* pMCV);
     Coord findPlaceLocation(Uint32 itemID);
+    Coord findPlaceLocationSimple(Uint32 itemID);
+    Coord findSlabPlaceLocation(Uint32 itemID);
+    Coord findTurretPlaceLocation(Uint32 itemID);
     Coord findSquadCenter(int houseID);
     Coord findBaseCentre(int houseID);
+    Coord findBestDeathHandTarget(int enemyHouseID);
+    double getProductionBuildingMultiplier(int itemID) const;
     Coord findSquadRallyLocation();
     Coord findSquadRetreatLocation();
+    void moveToOptimalSquadPosition(const UnitBase* pUnit, FixPoint squadRadius);
+    void kiteAwayFromThreat(const UnitBase* pUnit, const ObjectBase* pThreat, int desiredRange);
+
+    bool tryLaunchOrnithopterStrike(const QuantBotConfig::DifficultySettings& diffSettings,
+                                    const QuantBotConfig& config);
 
     std::list<Coord> placeLocations;    ///< Where to place structures
+    OrnithopterStrikeTeam ornithopterStrikeTeam;
 
     void checkAllUnits();
     void retreatAllUnits();

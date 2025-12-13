@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 
 # Project name and version
-project(DuneLegacy VERSION 0.98.4 LANGUAGES C CXX)
+project(DuneLegacy VERSION 0.99.3 LANGUAGES C CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -22,9 +22,8 @@ endif()
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     if(APPLE)
         set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum OS X deployment version" FORCE)
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -flto -ffast-math -march=native -mtune=native")
-        set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -flto -ffast-math -march=native -mtune=native")
-        set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} -flto")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -ffast-math")
+        set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -ffast-math")
     endif()
 endif()
 
@@ -55,11 +54,12 @@ option(DUNELEGACY_BUILD_TESTS "Build test suite" OFF)
 option(DUNELEGACY_ENABLE_PCH "Enable precompiled headers" ON)
 option(DUNELEGACY_STATIC_RUNTIME "Use static runtime libraries" OFF)
 
-# Check for required packages with specific versions
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2>=2.32.4)
-pkg_check_modules(SDL2_MIXER REQUIRED SDL2_mixer>=2.8.1)
-pkg_check_modules(SDL2_TTF REQUIRED SDL2_ttf>=2.24.0)
+# Find required packages
+# When using vcpkg, these will be automatically found via CMAKE_TOOLCHAIN_FILE
+find_package(SDL2 CONFIG REQUIRED)
+find_package(SDL2_mixer CONFIG REQUIRED)
+find_package(SDL2_ttf CONFIG REQUIRED)
+find_package(CURL REQUIRED)
 
 # Platform-specific settings
 if(WIN32)
@@ -94,8 +94,23 @@ endif()
 # Global compile options
 if(MSVC)
     add_compile_options(/W4)
+    # Prevent Windows.h from defining min/max macros that conflict with std::min/std::max
+    add_compile_definitions(NOMINMAX)
+    add_compile_definitions(WIN32_LEAN_AND_MEAN)
 else()
     add_compile_options(-Wall -Wextra -pedantic)
+    add_compile_options(-Wno-unused-parameter -Wno-unused-but-set-variable -Wno-unknown-pragmas) # FIXME These should be cleaned up.
+    add_compile_options(-Wno-expansion-to-defined)  # Silences "define FMT_HAS_FEATURE(x) __has_feature(x) may not be portable" warnings.
+endif()
+
+# Windows-specific file operations (before adding subdirectories)
+if(WIN32)
+    # Copy all .PAK files
+    file(GLOB PAK_FILES "${CMAKE_SOURCE_DIR}/data/*.PAK")
+    foreach(PAK_FILE ${PAK_FILES})
+        get_filename_component(PAK_FILENAME ${PAK_FILE} NAME)
+        file(COPY "${PAK_FILE}" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
+    endforeach()
 endif()
 
 # Add subdirectories
@@ -105,80 +120,60 @@ if(DUNELEGACY_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
-# Create a custom target for copying data files
-add_custom_target(copy_data ALL
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/data/"
-    "${CMAKE_BINARY_DIR}/bin/"
-    COMMENT "Copying data files directly to bin directory"
-)
+# Create a custom target for copying data files (non-macOS platforms)
+# macOS bundles handle data copying in src/CMakeLists.txt
+if(NOT APPLE)
+    add_custom_target(copy_data ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/data/"
+        "${CMAKE_BINARY_DIR}/bin/"
+        COMMENT "Copying data files directly to bin directory"
+    )
+    
+    # Add dependency to ensure data files are copied after main target is built
+    add_dependencies(copy_data dunelegacy)
+endif()
 
-# Add dependency to ensure data files are copied after main target is built
-add_dependencies(copy_data dunelegacy)
 
-# Windows-specific file operations
+# Platform-specific install configuration
 if(WIN32)
-    # Copy all .PAK files
-    file(GLOB PAK_FILES "${CMAKE_SOURCE_DIR}/data/*.PAK")
-    foreach(PAK_FILE ${PAK_FILES})
-        get_filename_component(PAK_FILENAME ${PAK_FILE} NAME)
-        file(COPY "${PAK_FILE}" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-    endforeach()
-    
-    # SDL2 DLL handling
-    find_program(SDL2_DLL_PATH "SDL2.dll" 
-        HINTS ${SDL2_LIBRARY_DIRS} ${SDL2_LIBDIR} 
-        PATH_SUFFIXES bin
-        DOC "Path to SDL2.dll")
-    find_program(SDL2_MIXER_DLL_PATH "SDL2_mixer.dll"
-        HINTS ${SDL2_MIXER_LIBRARY_DIRS} ${SDL2_MIXER_LIBDIR}
-        PATH_SUFFIXES bin
-        DOC "Path to SDL2_mixer.dll")
-    find_program(SDL2_TTF_DLL_PATH "SDL2_ttf.dll"
-        HINTS ${SDL2_TTF_LIBRARY_DIRS} ${SDL2_TTF_LIBDIR}
-        PATH_SUFFIXES bin
-        DOC "Path to SDL2_ttf.dll")
-        
-    # Copy SDL2 DLLs (either from found locations or fallback)
-    # SDL2.dll
-    if(SDL2_DLL_PATH)
-        file(COPY "${SDL2_DLL_PATH}" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2.dll from ${SDL2_DLL_PATH}")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2.dll")
-        file(COPY "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2.dll" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2.dll from fallback location")
-    else()
-        message(WARNING "SDL2.dll not found. Please copy it manually to the build/bin directory.")
-    endif()
-    
-    # SDL2_mixer.dll
-    if(SDL2_MIXER_DLL_PATH)
-        file(COPY "${SDL2_MIXER_DLL_PATH}" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2_mixer.dll from ${SDL2_MIXER_DLL_PATH}")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2_mixer.dll")
-        file(COPY "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2_mixer.dll" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2_mixer.dll from fallback location")
-    else()
-        message(WARNING "SDL2_mixer.dll not found. Please copy it manually to the build/bin directory.")
-    endif()
-    
-    # SDL2_ttf.dll
-    if(SDL2_TTF_DLL_PATH)
-        file(COPY "${SDL2_TTF_DLL_PATH}" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2_ttf.dll from ${SDL2_TTF_DLL_PATH}")
-    elseif(EXISTS "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2_ttf.dll")
-        file(COPY "${CMAKE_SOURCE_DIR}/bin/Release-x64/SDL2_ttf.dll" DESTINATION "${CMAKE_BINARY_DIR}/bin/")
-        message(STATUS "Copying SDL2_ttf.dll from fallback location")
-    else()
-        message(WARNING "SDL2_ttf.dll not found. Please copy it manually to the build/bin directory.")
-    endif()
+    # Windows: install all files to root directory (not in a share subdirectory)
+    set(DUNELEGACY_INSTALL_ROOT ".")
+    set(DUNELEGACY_DATA_DIR ".")
+    set(DUNELEGACY_CONFIG_DIR "config")
+    set(DUNELEGACY_DOC_DIR ".")
+elseif(APPLE)
+    # macOS already handled via bundle
+    set(DUNELEGACY_INSTALL_ROOT ".")
+    set(DUNELEGACY_DATA_DIR "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}")
+    set(DUNELEGACY_CONFIG_DIR "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/config")
+    set(DUNELEGACY_DOC_DIR "${CMAKE_INSTALL_DOCDIR}")
+else()
+    # Unix/Linux FHS structure
+    set(DUNELEGACY_INSTALL_ROOT "${CMAKE_INSTALL_BINDIR}")
+    set(DUNELEGACY_DATA_DIR "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}")
+    set(DUNELEGACY_CONFIG_DIR "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}/config")
+    set(DUNELEGACY_DOC_DIR "${CMAKE_INSTALL_DOCDIR}")
 endif()
 
 # Install data files
-install(DIRECTORY data/
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}
-    PATTERN "*.svn" EXCLUDE
-)
+# Install configuration template files to config subdirectory
+# For macOS bundles, these are already inside the .app via POST_BUILD commands
+# For Windows with VS build, config files are installed from VS output directory to root
+if(NOT APPLE)
+    set(VS_OUTPUT_DIR "${CMAKE_SOURCE_DIR}/bin/Release-x64")
+    if(WIN32 AND EXISTS "${VS_OUTPUT_DIR}/config")
+        # Config files will be installed from VS output directory to root (see src/CMakeLists.txt)
+    else()
+        install(FILES 
+            config/ObjectData.ini.default
+            "config/QuantBot Config.ini.default"
+            "config/Dune Legacy.ini"
+            config/README.md
+            DESTINATION ${DUNELEGACY_CONFIG_DIR}
+        )
+    endif()
+endif()
 
 # Install desktop file and icons on Linux
 if(UNIX AND NOT APPLE)
@@ -198,9 +193,27 @@ if(UNIX AND NOT APPLE)
 endif()
 
 # Install documentation
-install(FILES AUTHORS COPYING NEWS README
-    DESTINATION ${CMAKE_INSTALL_DOCDIR}
-)
+if(WIN32)
+    # Windows: install docs to root
+    install(FILES AUTHORS COPYING NEWS README
+        DESTINATION ${DUNELEGACY_DOC_DIR}
+    )
+    # Install release notes
+    install(FILES "release_notes/RELEASE_NOTES.md"
+        DESTINATION ${DUNELEGACY_DOC_DIR}
+        RENAME "Release_Notes.md"
+    )
+elseif(NOT APPLE)
+    # Linux: use standard doc directory
+    install(FILES AUTHORS COPYING NEWS README
+        DESTINATION ${DUNELEGACY_DOC_DIR}
+    )
+    install(FILES "release_notes/RELEASE_NOTES.md"
+        DESTINATION ${DUNELEGACY_DOC_DIR}
+        RENAME "Release_Notes.md"
+        OPTIONAL
+    )
+endif()
 
 # CPack configuration for packaging
 set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
@@ -212,22 +225,137 @@ set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/COPYING")
 set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README")
 
 if(WIN32)
-    set(CPACK_GENERATOR "NSIS")
+    set(CPACK_GENERATOR "NSIS;ZIP")
     set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
-    set(CPACK_NSIS_MODIFY_PATH ON)
+    set(CPACK_NSIS_MODIFY_PATH OFF)
     set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/dunelegacy.ico")
     set(CPACK_NSIS_MUI_UNIICON "${CMAKE_CURRENT_SOURCE_DIR}/dunelegacy.ico")
-    set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\${PROJECT_NAME}.exe")
+    set(CPACK_NSIS_INSTALLED_ICON_NAME "dunelegacy.exe")
+    set(CPACK_NSIS_DISPLAY_NAME "Dune Legacy")
+    set(CPACK_NSIS_PACKAGE_NAME "Dune Legacy")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY "DuneLegacy")
+    set(CPACK_PACKAGE_FILE_NAME "DuneLegacy-${PROJECT_VERSION}-Windows-x64")
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY ".")
+    set(CPACK_NSIS_MUI_FINISHPAGE_RUN "dunelegacy.exe")
+    
+    # Add checkbox to view release notes on finish page
+    set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS "
+        WriteRegStr HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunelegacy.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\dunelegacy.exe\\\"
+        WriteRegStr HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunelegacy.exe\\\" \\\"Path\\\" \\\"$INSTDIR\\\"
+    ")
+    set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS "
+        DeleteRegKey HKLM \\\"Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\App Paths\\\\dunelegacy.exe\\\"
+    ")
+    
+    # Custom NSIS code for release notes checkbox on finish page
+    set(CPACK_NSIS_DEFINES "
+        !define MUI_FINISHPAGE_SHOWREADME \\\"$INSTDIR\\\\Release_Notes.md\\\"
+        !define MUI_FINISHPAGE_SHOWREADME_TEXT \\\"View Release Notes\\\"
+        !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+    ")
+    
+    # Create Start Menu shortcuts
+    set(CPACK_NSIS_CREATE_ICONS_EXTRA "
+        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Dune Legacy.lnk\\\" \\\"$INSTDIR\\\\dunelegacy.exe\\\"
+        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Release Notes.lnk\\\" \\\"$INSTDIR\\\\Release_Notes.md\\\"
+        CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Readme.lnk\\\" \\\"$INSTDIR\\\\README\\\"
+    ")
+    set(CPACK_NSIS_DELETE_ICONS_EXTRA "
+        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Dune Legacy.lnk\\\"
+        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Release Notes.lnk\\\"
+        Delete \\\"$SMPROGRAMS\\\\$MUI_TEMP\\\\Readme.lnk\\\"
+    ")
+    
+    # Add custom target for Windows installer
+    add_custom_target(installer
+        COMMAND ${CMAKE_COMMAND} -E echo "Cleaning CPack cache and install directory..."
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/_CPack_Packages
+        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/*.exe
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/install
+        COMMAND ${CMAKE_COMMAND} -E echo "Building binary..."
+        COMMAND ${CMAKE_COMMAND} --build . --config Release
+        COMMAND ${CMAKE_COMMAND} -E echo "Removing install directory to force fresh install..."
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/install
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing to staging directory..."
+        COMMAND ${CMAKE_COMMAND} --install . --prefix install --config Release
+        COMMAND ${CMAKE_COMMAND} -E echo "Creating installer..."
+        COMMAND ${CMAKE_CPACK_COMMAND} -G NSIS -C Release
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Building Windows NSIS installer (with guaranteed fresh install)..."
+    )
 elseif(APPLE)
     set(CPACK_GENERATOR "DragNDrop")
-    set(CPACK_DMG_VOLUME_NAME "${PROJECT_NAME}")
+    set(CPACK_DMG_VOLUME_NAME "Dune Legacy ${PROJECT_VERSION}")
+    set(CPACK_DMG_FORMAT "UDZO")  # Compressed
+    set(CPACK_PACKAGE_FILE_NAME "DuneLegacy-${PROJECT_VERSION}-macOS")
     set(MACOSX_BUNDLE_ICON_FILE "dunelegacy.icns")
+    
+    # Install README and release notes to DMG root (not inside .app)
+    install(FILES README DESTINATION . COMPONENT Runtime)
+    install(FILES "release_notes/RELEASE_NOTES.md" 
+            DESTINATION . 
+            RENAME "Release Notes.md"
+            COMPONENT Runtime
+            OPTIONAL)
+    
+    # Optional: Add custom DMG background and layout if files exist
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/dmg_background.png")
+        set(CPACK_DMG_BACKGROUND_IMAGE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/dmg_background.png")
+    endif()
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/DMGSetup.scpt")
+        set(CPACK_DMG_DS_STORE_SETUP_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/packaging/DMGSetup.scpt")
+    endif()
+    
+    # Add custom target for DMG creation
+    # NOTE: We bypass CPack entirely due to persistent caching issues where old binaries
+    # would get packaged even after fresh builds. This manual approach uses hdiutil directly.
+    add_custom_target(dmg
+        COMMAND ${CMAKE_COMMAND} -E echo "Building binary..."
+        COMMAND ${CMAKE_COMMAND} --build . --config Release
+        COMMAND ${CMAKE_COMMAND} -E echo "Cleaning old DMG and staging..."
+        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/DuneLegacy-${PROJECT_VERSION}-macOS.dmg
+        COMMAND ${CMAKE_COMMAND} -E remove_directory /tmp/dunelegacy_dmg_staging
+        COMMAND ${CMAKE_COMMAND} -E echo "Staging files for DMG..."
+        COMMAND ${CMAKE_COMMAND} -E make_directory /tmp/dunelegacy_dmg_staging
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_BINARY_DIR}/bin/dunelegacy.app /tmp/dunelegacy_dmg_staging/dunelegacy.app
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/README /tmp/dunelegacy_dmg_staging/README
+        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/release_notes/RELEASE_NOTES.md /tmp/dunelegacy_dmg_staging/Release\\ Notes.md
+        COMMAND ${CMAKE_COMMAND} -E echo "Creating Applications symlink for drag-and-drop install..."
+        COMMAND ln -sf /Applications /tmp/dunelegacy_dmg_staging/Applications
+        COMMAND ${CMAKE_COMMAND} -E echo "Creating DMG with hdiutil..."
+        COMMAND hdiutil create -volname "Dune Legacy ${PROJECT_VERSION}" -srcfolder /tmp/dunelegacy_dmg_staging -ov -format UDZO ${CMAKE_BINARY_DIR}/DuneLegacy-${PROJECT_VERSION}-macOS.dmg
+        COMMAND ${CMAKE_COMMAND} -E echo "Cleaning up staging..."
+        COMMAND ${CMAKE_COMMAND} -E remove_directory /tmp/dunelegacy_dmg_staging
+        COMMAND ${CMAKE_COMMAND} -E echo "DMG created: DuneLegacy-${PROJECT_VERSION}-macOS.dmg"
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Building macOS DMG installer (manual hdiutil - bypasses CPack caching issues)..."
+    )
 else()
-    set(CPACK_GENERATOR "DEB;RPM")
+    set(CPACK_GENERATOR "DEB;RPM;TGZ")
     set(CPACK_DEBIAN_PACKAGE_SECTION "games")
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "libsdl2-2.0-0, libsdl2-mixer-2.0-0, libsdl2-ttf-2.0-0")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Dune Legacy Team")
     set(CPACK_RPM_PACKAGE_LICENSE "GPL-2.0+")
     set(CPACK_RPM_PACKAGE_GROUP "Amusements/Games")
+    set(CPACK_PACKAGE_FILE_NAME "DuneLegacy-${PROJECT_VERSION}-Linux-x64")
+    
+    # Add custom target for Linux packages
+    add_custom_target(package
+        COMMAND ${CMAKE_COMMAND} -E echo "Cleaning CPack cache and install directory..."
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/_CPack_Packages
+        COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_BINARY_DIR}/*.deb ${CMAKE_BINARY_DIR}/*.rpm ${CMAKE_BINARY_DIR}/*.tar.gz
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/install
+        COMMAND ${CMAKE_COMMAND} -E echo "Building binary..."
+        COMMAND ${CMAKE_COMMAND} --build . --config Release
+        COMMAND ${CMAKE_COMMAND} -E echo "Removing install directory to force fresh install..."
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/install
+        COMMAND ${CMAKE_COMMAND} -E echo "Installing to staging directory..."
+        COMMAND ${CMAKE_COMMAND} --install . --prefix install --config Release
+        COMMAND ${CMAKE_COMMAND} -E echo "Creating packages..."
+        COMMAND ${CMAKE_CPACK_COMMAND} -G "DEB;RPM;TGZ" -C Release
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Building Linux packages (DEB, RPM, TGZ) (with guaranteed fresh install)..."
+    )
 endif()
 
 include(CPack) 

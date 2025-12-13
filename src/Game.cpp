@@ -16,6 +16,14 @@
  */
 
 #include <Game.h>
+#include <main.h>
+#include <cstdarg>
+#include <ctime>
+#include <chrono>
+
+// Initialize static performance logging members
+std::ofstream Game::performanceLogFile;
+std::mutex Game::performanceLogMutex;
 
 #include <globals.h>
 #include <config.h>
@@ -42,6 +50,7 @@
 #include <players/HumanPlayer.h>
 
 #include <Network/NetworkManager.h>
+#include <mod/ModManager.h>
 
 #include <GUI/dune/InGameMenu.h>
 #include <GUI/dune/WaitingForOtherPlayers.h>
@@ -51,7 +60,9 @@
 
 #include <House.h>
 #include <Map.h>
+#include <SpatialGrid.h>
 #include <Bullet.h>
+#include <AStarSearch.h>
 #include <Explosion.h>
 #include <GameInitSettings.h>
 #include <ScreenBorder.h>
@@ -66,6 +77,7 @@
 #include <units/InfantryBase.h>
 
 #include <algorithm>
+#include <exception>
 #include <sstream>
 #include <iomanip>
 
@@ -92,11 +104,49 @@ Game::Game() {
     screenborder = new ScreenBorder(gameBoardRect);
 }
 
+void Game::initializeSpatialGrid(int mapWidth, int mapHeight) {
+    constexpr int kSpatialGridCellSize = 4;
+
+    if(mapWidth <= 0 || mapHeight <= 0) {
+        spatialGrid.reset();
+        return;
+    }
+
+    try {
+        spatialGrid = std::make_unique<SpatialGrid>(mapWidth, mapHeight, kSpatialGridCellSize);
+    } catch(const std::exception& ex) {
+        SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Failed to initialize spatial grid (%s)", ex.what());
+        spatialGrid.reset();
+    }
+}
+
+void Game::queueTargetRequest(Uint32 objectId) {
+    if(objectId == NONE_ID) {
+        return;
+    }
+
+    if(pendingTargetRequestIds.insert(objectId).second) {
+        targetRequestQueue.push_back({objectId});
+    }
+}
+
+void Game::queuePathRequest(Uint32 objectId) {
+    if(objectId == NONE_ID) {
+        return;
+    }
+
+    if(pendingPathRequestIds.insert(objectId).second) {
+        pathRequestQueue.push_back({objectId});
+    }
+}
 
 /**
     The destructor frees up all the used memory.
 */
 Game::~Game() {
+    // Close performance log
+    closePerformanceLog();
+    
     // Clean up cursor manager
     cursorManager.cleanup();
 
@@ -127,15 +177,87 @@ Game::~Game() {
     }
     explosionList.clear();
 
+    if(spatialGrid) {
+        spatialGrid->clear();
+        spatialGrid.reset();
+    }
+
     delete currentGameMap;
     currentGameMap = nullptr;
     delete screenborder;
     screenborder = nullptr;
 }
 
+void Game::initPerformanceLog() {
+    std::lock_guard<std::mutex> lock(performanceLogMutex);
+    
+    if(performanceLogFile.is_open()) {
+        return;  // Already initialized
+    }
+    
+    std::string logPath = getPerformanceLogFilepath();
+    performanceLogFile.open(logPath, std::ios::out | std::ios::trunc);
+    
+    if(performanceLogFile.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+        char timeStr[100];
+        std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", std::localtime(&nowTime));
+        
+        performanceLogFile << "=== Dune Legacy Performance Log Started " << timeStr << " ===" << std::endl;
+        performanceLogFile << "Version: " << VERSION << std::endl;
+        performanceLogFile << "Platform: " << SDL_GetPlatform() << std::endl;
+        performanceLogFile << std::endl;
+        performanceLogFile.flush();
+        SDL_Log("Performance log initialized: %s", logPath.c_str());
+    } else {
+        SDL_Log("Warning: Could not open performance log file: %s", logPath.c_str());
+    }
+}
+
+void Game::closePerformanceLog() {
+    std::lock_guard<std::mutex> lock(performanceLogMutex);
+    
+    if(performanceLogFile.is_open()) {
+        auto now = std::chrono::system_clock::now();
+        std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+        char timeStr[100];
+        std::strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", std::localtime(&nowTime));
+        
+        performanceLogFile << std::endl;
+        performanceLogFile << "=== Performance Log Closed " << timeStr << " ===" << std::endl;
+        performanceLogFile.close();
+    }
+}
+
+void Game::logPerformance(const char* format, ...) {
+    std::lock_guard<std::mutex> lock(performanceLogMutex);
+    
+    if(!performanceLogFile.is_open()) {
+        return;
+    }
+    
+    char buffer[2048];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    
+    performanceLogFile << buffer << std::endl;
+    performanceLogFile.flush();
+}
+
 
 void Game::initGame(const GameInitSettings& newGameInitSettings) {
     gameInitSettings = newGameInitSettings;
+
+    targetRequestQueue.clear();
+    pendingTargetRequestIds.clear();
+    pathRequestQueue.clear();
+    pendingPathRequestIds.clear();
+
+    // Initialize performance logging
+    initPerformanceLog();
 
     // Initialize cursor manager
     cursorManager.initialize();
@@ -162,7 +284,8 @@ void Game::initGame(const GameInitSettings& newGameInitSettings) {
             gameType = gameInitSettings.getGameType();
             randomGen.setSeed(gameInitSettings.getRandomSeed());
 
-            objectData.loadFromINIFile("ObjectData.ini");
+            objectData.loadFromINIFile("config/ObjectData.ini");
+            objectData.logSettings();
 
             if(gameInitSettings.getMission() != 0) {
                 techLevel = ((gameInitSettings.getMission() + 1)/3) + 1 ;
@@ -206,6 +329,16 @@ void Game::initReplay(const std::string& filename) {
 
 void Game::processObjects()
 {
+    processTargetRequests();
+    
+    // Time pathfinding
+    Uint64 pathStart = SDL_GetPerformanceCounter();
+    processPathRequests();
+    Uint64 pathEnd = SDL_GetPerformanceCounter();
+    const double pathMs = getElapsedMs(pathStart, pathEnd);
+    frameTiming.pathfindingMs += pathMs;
+    frameTiming.pathfindingMsThisFrame += pathMs;
+
     // update all tiles
     for(int y = 0; y < currentGameMap->getSizeY(); y++) {
         for(int x = 0; x < currentGameMap->getSizeX(); x++) {
@@ -213,17 +346,30 @@ void Game::processObjects()
         }
     }
 
+    // Time structure updates
+    Uint64 structStart = SDL_GetPerformanceCounter();
     for(StructureBase* pStructure : structureList) {
         pStructure->update();
     }
+    Uint64 structEnd = SDL_GetPerformanceCounter();
+    const double structMs = getElapsedMs(structStart, structEnd);
+    frameTiming.structuresMs += structMs;
+    frameTiming.structuresMsThisFrame += structMs;
 
     if ((currentCursorMode == CursorMode_Placing) && selectedList.empty()) {
         setCursorMode(CursorMode_Normal);
     }
 
+    // Time unit updates
+    Uint64 unitStart = SDL_GetPerformanceCounter();
+    frameTiming.unitCount = unitList.size();
     for(UnitBase* pUnit : unitList) {
         pUnit->update();
     }
+    Uint64 unitEnd = SDL_GetPerformanceCounter();
+    const double unitMs = getElapsedMs(unitStart, unitEnd);
+    frameTiming.unitsMs += unitMs;
+    frameTiming.unitsMsThisFrame += unitMs;
 
     for(Bullet* pBullet : bulletList) {
         pBullet->update();
@@ -231,6 +377,873 @@ void Game::processObjects()
 
     for(Explosion* pExplosion : explosionList) {
         pExplosion->update();
+    }
+}
+
+void Game::processTargetRequests() {
+    if(targetRequestQueue.empty()) {
+        return;
+    }
+
+    // MULTIPLAYER FIX (Issue #2): Removed time-based budget check
+    // Now uses ONLY deterministic per-cycle request limit
+    // Timing is still measured for profiling, but does NOT affect execution
+
+    const Uint64 start = SDL_GetPerformanceCounter();  // PROFILING ONLY
+
+    // Deterministic per-cycle limit (same on all clients regardless of performance)
+    // Target acquisition is fast (~0.05ms each), so we can process many per cycle
+    static constexpr int TargetRequestsPerCycle = 50;  // ~2.5ms budget at 0.05ms each
+    
+    int processedCount = 0;
+    while(!targetRequestQueue.empty() && processedCount < TargetRequestsPerCycle) {
+        TargetRequest request = targetRequestQueue.front();
+        targetRequestQueue.pop_front();
+        pendingTargetRequestIds.erase(request.objectId);
+
+        auto* unit = dynamic_cast<UnitBase*>(objectManager.getObject(request.objectId));
+        if(unit != nullptr) {
+            unit->resolvePendingTargetRequest();
+        }
+
+        processedCount++;
+    }
+    
+    const Uint64 end = SDL_GetPerformanceCounter();  // PROFILING ONLY
+    const double elapsedMs = getElapsedMs(start, end);  // PROFILING ONLY
+    
+    // MULTIPLAYER TELEMETRY: Log synchronization info and queue starvation warnings
+    if(pNetworkManager != nullptr && processedCount > 0) {
+        // Log every 10 seconds to verify synchronization
+        if((gameCycleCount % MILLI2CYCLES(10000)) == 0) {
+            SDL_Log("[MP-Sync Cycle %d] Targets: %d, Queue: %zu, Time: %.2fms",
+                    gameCycleCount,
+                    processedCount,
+                    targetRequestQueue.size(),
+                    elapsedMs);
+        }
+    }
+    
+    // Queue starvation warning (deterministic across clients)
+    if(!targetRequestQueue.empty() && processedCount >= TargetRequestsPerCycle) {
+        // Log every 5 seconds if queue is growing
+        if((gameCycleCount % MILLI2CYCLES(5000)) == 0 && targetRequestQueue.size() > 50) {
+            SDL_Log("[MP-Sync WARNING Cycle %d] Target queue may be starved: %zu requests pending",
+                    gameCycleCount, targetRequestQueue.size());
+        }
+    }
+}
+
+void Game::recordPathTokens(size_t totalTokens) {
+    const size_t lastIndex = frameTiming.pathTokenHistogram.size() - 1;
+    for(size_t i = 0; i < PathTokenBucketBounds.size(); ++i) {
+        if(totalTokens < PathTokenBucketBounds[i]) {
+            frameTiming.pathTokenHistogram[i]++;
+            return;
+        }
+    }
+    frameTiming.pathTokenHistogram[lastIndex]++;
+}
+
+void Game::recordCompletedPathTokens(size_t totalTokens) {
+    frameTiming.tokensPerCompletedPathStats.add(static_cast<double>(totalTokens));
+    if(totalTokens < frameTiming.minTokensPerCompletedPath) {
+        frameTiming.minTokensPerCompletedPath = totalTokens;
+    }
+    if(totalTokens > frameTiming.maxTokensPerCompletedPath) {
+        frameTiming.maxTokensPerCompletedPath = totalTokens;
+    }
+}
+
+void Game::recordFailedPathTokens(size_t totalTokens) {
+    frameTiming.tokensPerFailedPathStats.add(static_cast<double>(totalTokens));
+    if(totalTokens < frameTiming.minTokensPerFailedPath) {
+        frameTiming.minTokensPerFailedPath = totalTokens;
+    }
+    if(totalTokens > frameTiming.maxTokensPerFailedPath) {
+        frameTiming.maxTokensPerFailedPath = totalTokens;
+    }
+}
+
+void Game::logPathInstrumentationIfNeeded() {
+    constexpr Uint32 kInstrumentationInterval = MILLI2CYCLES(30 * 1000);
+    if(gameCycleCount - lastPathInstrumentationLogCycle < kInstrumentationInterval) {
+        return;
+    }
+
+    lastPathInstrumentationLogCycle = gameCycleCount;
+
+    size_t hits = frameTiming.pathReuseHitsWindow;
+    size_t misses = frameTiming.pathReuseMissesWindow;
+    size_t totalChecks = hits + misses;
+
+    frameTiming.totalPathReuseHits += hits;
+    frameTiming.totalPathReuseMisses += misses;
+
+    frameTiming.pathReuseHitsWindow = 0;
+    frameTiming.pathReuseMissesWindow = 0;
+
+    const auto poolStats = AStarSearch::getPoolUsageStats();
+    const double reuseRate = (totalChecks > 0)
+        ? (100.0 * static_cast<double>(hits) / static_cast<double>(totalChecks))
+        : 0.0;
+
+    const int mapSize = (currentGameMap != nullptr)
+        ? currentGameMap->getSizeX()
+        : 0;
+
+    logPerformance("[PathInstrumentation] Cycle %u | Map: %dx%d | Reuse: %zu/%zu (%.1f%%) | Pool hits=%zu grow=%zu fallback=%zu | Pool usage=%zu/%zu",
+                   gameCycleCount, mapSize, mapSize, hits, totalChecks, reuseRate,
+                   poolStats.reuseHits, poolStats.bufferExpansions, poolStats.fallbackAllocs,
+                   poolStats.buffersInUse, poolStats.totalBuffers);
+    
+    // Log path invalidation reasons
+    if(misses > 0) {
+        logPerformance("[PathInvalidation] DestChanged=%zu HuntTooFar=%zu Blocked=%zu",
+                       frameTiming.pathInvalidDestChanged,
+                       frameTiming.pathInvalidHuntTooFar,
+                       frameTiming.pathInvalidBlocked);
+        
+        // Reset counters
+        frameTiming.pathInvalidDestChanged = 0;
+        frameTiming.pathInvalidHuntTooFar = 0;
+        frameTiming.pathInvalidBlocked = 0;
+    }
+    
+    // Log movement pause reasons (for debugging stuttering)
+    uint64_t totalPauses = frameTiming.pauseWaitingForPath + frameTiming.pauseWaitingForBlocker +
+                           frameTiming.pauseRecalcCooldown + frameTiming.pauseTurningToFace;
+    if(totalPauses > 0) {
+        logPerformance("[MovementPauses] Total=%llu | WaitPath=%llu WaitBlocker=%llu RecalcCD=%llu Turning=%llu",
+                       totalPauses,
+                       frameTiming.pauseWaitingForPath,
+                       frameTiming.pauseWaitingForBlocker,
+                       frameTiming.pauseRecalcCooldown,
+                       frameTiming.pauseTurningToFace);
+        
+        // Reset counters
+        frameTiming.pauseWaitingForPath = 0;
+        frameTiming.pauseWaitingForBlocker = 0;
+        frameTiming.pauseRecalcCooldown = 0;
+        frameTiming.pauseTurningToFace = 0;
+    }
+}
+
+void Game::processPathRequests() {
+    if(pathRequestQueue.empty()) {
+        frameTiming.pathsPerCycleStats.add(0.0);
+        frameTiming.pathTokensPerCycleStats.add(0.0);
+        logPathInstrumentationIfNeeded();
+        return;
+    }
+
+    // MULTIPLAYER FIX (Issue #1): Removed time-based budget checks
+    // Now uses ONLY deterministic token budget for multiplayer synchronization
+    // Timing is still measured for profiling, but does NOT affect execution
+
+    const Uint64 start = SDL_GetPerformanceCounter();  // PROFILING ONLY
+
+    frameTiming.pathsProcessedThisCycle = 0;
+    frameTiming.pathfindingMsThisCycle = 0.0;
+    frameTiming.pathTokensThisCycle = 0;
+
+    // Track queue depth
+    const int queueDepth = static_cast<int>(pathRequestQueue.size());
+    if(queueDepth > frameTiming.maxPathQueueLength) {
+        frameTiming.maxPathQueueLength = queueDepth;
+    }
+
+    // PHASE 1: NEGOTIATED TOKEN BUDGET WITH CARRY-OVER (single-player only)
+    // Start at 15k tokens/cycle, adapt between 5k-25k based on FPS
+    // NEVER scale UP aggressively (that caused the freeze!)
+    // Carry-over is DISABLED in multiplayer to prevent desync
+    
+    // Calculate budget with carry-over (capped at kHardCap)
+    // Note: carryOverTokens is always 0 in multiplayer
+    size_t budget = std::min<size_t>(
+        negotiatedBudget + carryOverTokens,
+        kHardCap
+    );
+    carryOverTokens = 0;  // Reset for this cycle
+    
+    size_t tokensRemaining = budget;
+    size_t tokensUsedThisCycle = 0;
+    
+    // Process paths until token budget exhausted (deterministic stopping condition)
+    while(!pathRequestQueue.empty() && tokensRemaining > 0) {
+        PathRequest request = pathRequestQueue.front();
+        pathRequestQueue.pop_front();
+        pendingPathRequestIds.erase(request.objectId);
+
+        auto* unit = dynamic_cast<UnitBase*>(objectManager.getObject(request.objectId));
+        if(unit != nullptr) {
+            UnitBase::PathRequestStats stats = unit->resolvePendingPathRequest();
+            
+            frameTiming.pathsProcessedThisCycle++;
+            frameTiming.totalPathsProcessedThisFrame++;
+            frameTiming.totalPathsProcessed++;
+            
+            // Track tokens (nodes expanded)
+            const size_t tokens = stats.nodesExpanded;
+            frameTiming.pathTokensThisCycle += tokens;
+            frameTiming.pathTokensThisFrame += tokens;
+            frameTiming.totalPathTokens += tokens;
+            tokensUsedThisCycle += tokens;
+            
+            // Deduct from token budget
+            if (tokens < tokensRemaining) {
+                tokensRemaining -= tokens;
+            } else {
+                tokensRemaining = 0;
+            }
+            
+            // Track min/max tokens per cycle
+            if(frameTiming.pathTokensThisCycle > frameTiming.maxPathTokensPerCycle) {
+                frameTiming.maxPathTokensPerCycle = frameTiming.pathTokensThisCycle;
+            }
+            
+            // Record token distribution histogram
+            recordPathTokens(tokens);
+            
+            // Track completed vs failed paths
+            if(!stats.invalidDestination) {
+                if(stats.pathFound) {
+                    recordCompletedPathTokens(tokens);
+                } else {
+                    frameTiming.pathsFailedThisFrame++;
+                    frameTiming.totalPathsFailed++;
+                    recordFailedPathTokens(tokens);
+                }
+            }
+        }
+    }
+    
+    // PHASE 1.2: BANK UNUSED TOKENS FOR NEXT CYCLE
+    // MULTIPLAYER FIX: Disable carry-over in multiplayer to prevent desync
+    // Carry-over can accumulate drift if pathfinding is even slightly non-deterministic
+    if (tokensUsedThisCycle < budget && pNetworkManager == nullptr) {
+        // Bank unused tokens (capped at kDebtCap) - SINGLE-PLAYER ONLY
+        carryOverTokens = std::min<size_t>(
+            kDebtCap,
+            budget - tokensUsedThisCycle
+        );
+    } else if(pNetworkManager != nullptr) {
+        // Multiplayer: Always discard unused tokens to maintain sync
+        carryOverTokens = 0;
+    }
+    
+    // DESYNC DETECTION: Log token usage on specific cycles for debugging
+    if(pNetworkManager != nullptr && (gameCycleCount % 375 == 0)) {
+        SDL_Log("[DESYNC DEBUG] Cycle %d: budget=%zu, tokensUsed=%zu, carryOver=%zu (always 0 in MP), queue=%zu",
+                gameCycleCount, negotiatedBudget, tokensUsedThisCycle, carryOverTokens, pathRequestQueue.size());
+    }
+    
+    // Track token budget exhaustion
+    if (tokensRemaining == 0 && !pathRequestQueue.empty()) {
+        frameTiming.tokenBudgetExhaustedCount++;
+    }
+    
+    const Uint64 end = SDL_GetPerformanceCounter();  // PROFILING ONLY
+    frameTiming.pathfindingMsThisCycle = getElapsedMs(start, end);  // PROFILING ONLY
+    
+    // Record cycle statistics
+    frameTiming.pathsPerCycleStats.add(static_cast<double>(frameTiming.pathsProcessedThisCycle));
+    frameTiming.pathTokensPerCycleStats.add(static_cast<double>(frameTiming.pathTokensThisCycle));
+    
+    // Track max tokens per frame
+    if(frameTiming.pathTokensThisFrame > frameTiming.maxPathTokensPerFrame) {
+        frameTiming.maxPathTokensPerFrame = frameTiming.pathTokensThisFrame;
+    }
+    
+    // Track max per-cycle values (PROFILING ONLY - does not affect gameplay)
+    if(frameTiming.pathfindingMsThisCycle > frameTiming.maxPathfindingMsPerCycle) {
+        frameTiming.maxPathfindingMsPerCycle = frameTiming.pathfindingMsThisCycle;
+    }
+    if(frameTiming.pathsProcessedThisCycle > frameTiming.maxPathsPerCycle) {
+        frameTiming.maxPathsPerCycle = frameTiming.pathsProcessedThisCycle;
+    }
+    
+    // MULTIPLAYER TELEMETRY: Log synchronization info
+    if(pNetworkManager != nullptr && frameTiming.pathsProcessedThisCycle > 0) {
+        // Log every 10 seconds to verify synchronization
+        if((gameCycleCount % MILLI2CYCLES(10000)) == 0) {
+            SDL_Log("[MP-Sync Cycle %d] Budget: %zu (carry: %zu), Paths: %d, Tokens Used: %zu, Queue: %zu",
+                    gameCycleCount,
+                    negotiatedBudget,
+                    carryOverTokens,
+                    frameTiming.pathsProcessedThisCycle,
+                    frameTiming.pathTokensThisCycle,
+                    pathRequestQueue.size());
+        }
+    }
+
+    logPathInstrumentationIfNeeded();
+}
+
+
+void Game::requestLowerBudget(int steps) {
+    // PHASE 1.4: REQUEST LOWER BUDGET VIA NETWORK COMMAND
+    SDL_Log("[PathBudget] requestLowerBudget triggered (current=%zu, steps=%d)",
+            negotiatedBudget, steps);
+    
+    // Calculate target: reduce by steps × 500
+    // Examples:
+    //   1 step: 15k → 14.5k (gradual reduction)
+    //   4 steps: 15k → 13k (aggressive FPS recovery)
+    size_t reduction = steps * 500;
+    size_t targetBudget;
+    if (negotiatedBudget > kMinBudget + reduction) {
+        targetBudget = negotiatedBudget - reduction;
+    } else {
+        targetBudget = kMinBudget;  // Floor at minimum (8k)
+    }
+    
+    targetBudget = std::clamp(targetBudget, kMinBudget, kMaxBudget);
+    
+    // Don't request if already at minimum
+    if (targetBudget >= negotiatedBudget) {
+        SDL_Log("[PathBudget] Already at minimum (%zu tokens/cycle)", negotiatedBudget);
+        return;
+    }
+    
+    SDL_Log("[PathBudget] Requesting reduction: %zu -> %zu tokens/cycle (%d steps × 500)",
+            negotiatedBudget, targetBudget, steps);
+    logPerformance("[BUDGET CHANGE] Cycle %d: Requesting reduction %zu -> %zu tokens/cycle (%d steps × 500, queue=%zu)",
+            gameCycleCount, negotiatedBudget, targetBudget, steps, pathRequestQueue.size());
+    
+    // In single-player, apply immediately
+    if (pNetworkManager == nullptr) {
+        negotiatedBudget = targetBudget;
+        carryOverTokens = 0;  // Reset carry-over on budget change
+        lastBudgetAction = BudgetAction::DECREASED;  // Track emergency drop for anti-oscillation
+        SDL_Log("[PathBudget] Applied immediately (single-player)");
+        logPerformance("[BUDGET CHANGE] Cycle %d: Applied immediately - new budget=%zu", 
+                gameCycleCount, negotiatedBudget);
+        return;
+    }
+    
+    // In multiplayer, use the proper budget negotiation system
+    // Only the host can broadcast budget changes
+    if(pNetworkManager->isServer()) {
+        // HOST: Broadcast the change to all clients
+        SDL_Log("[PathBudget] Host broadcasting budget reduction: %zu -> %zu", 
+                negotiatedBudget, targetBudget);
+        lastBudgetAction = BudgetAction::DECREASED;  // Track emergency drop for anti-oscillation
+        broadcastBudgetChange(targetBudget);
+    } else {
+        // CLIENT: This shouldn't happen - clients don't request budget changes
+        // Budget changes are driven by the host's decision logic
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+            "[PathBudget] Client called requestLowerBudget() - ignoring (host controls budget in multiplayer)");
+        logPerformance("[PathBudget] Cycle %d: Client incorrectly called requestLowerBudget() - ignoring",
+                gameCycleCount);
+    }
+}
+
+// MULTIPLAYER BUDGET NEGOTIATION IMPLEMENTATION
+
+void Game::checkBudgetAdjustment() {
+    if(pNetworkManager != nullptr && !pNetworkManager->isServer()) {
+        // CLIENT: Send stats ONE CYCLE BEFORE the check interval
+        // This ensures the host has fresh data when it makes its decision
+        if((gameCycleCount + 1) % kBudgetCheckInterval == 0 && frameTiming.frameCount > 0) {
+            const double avgFps = (frameTiming.frameCount * 1000.0 / frameTiming.totalMs);
+            sendStatsToHost(avgFps, frameTiming.simMsAvg, pathRequestQueue.size(), negotiatedBudget);
+        }
+    }
+    else if(gameCycleCount % kBudgetCheckInterval == 0 && frameTiming.frameCount > 0) {
+        const double avgFps = (frameTiming.frameCount * 1000.0 / frameTiming.totalMs);
+        
+        if(pNetworkManager != nullptr && pNetworkManager->isServer()) {
+            // HOST: Make decision based on collected stats + handle missing stats
+            // At this point, client stats from (cycle - 1) have arrived
+            makeHostBudgetDecision();
+        } else {
+            // SINGLE-PLAYER: Apply adjustment immediately
+            applySinglePlayerBudgetAdjustment(avgFps);
+        }
+    }
+}
+
+void Game::applySinglePlayerBudgetAdjustment(float avgFps) {
+    // VSync-compatible thresholds: 50/55/58 FPS for decrease, 59.5 FPS for increase
+    const double fpsIncreaseThreshold = 59.5;
+    const double fpsDecreaseThresholdModerate = 58.0;
+    const double fpsDecreaseThresholdAggressive = 55.0;
+    const double fpsDecreaseThresholdSevere = 50.0;
+    
+    // DROP: Three-tier reduction based on severity
+    if(avgFps < fpsDecreaseThresholdSevere && negotiatedBudget > kMinBudget) {
+        // Severe lag: massive reduction
+        size_t oldBudget = negotiatedBudget;
+        requestLowerBudget(8);  // Reduce by 4k (8 × 500)
+        
+        SDL_Log("[PathBudget] Cycle %d: Average FPS below 50: %.1f FPS - reducing budget severely (8 steps × 500) %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        logPerformance("[PathBudget] Cycle %d: Average FPS below 50: %.1f FPS - reducing budget severely %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        
+        lastBudgetAction = BudgetAction::DECREASED;
+        logFrameTiming();
+    }
+    else if(avgFps < fpsDecreaseThresholdAggressive && negotiatedBudget > kMinBudget) {
+        // Aggressive lag: strong reduction
+        size_t oldBudget = negotiatedBudget;
+        requestLowerBudget(4);  // Reduce by 2k (4 × 500)
+        
+        SDL_Log("[PathBudget] Cycle %d: Average FPS below 55: %.1f FPS - reducing budget aggressively (4 steps × 500) %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        logPerformance("[PathBudget] Cycle %d: Average FPS below 55: %.1f FPS - reducing budget aggressively %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        
+        lastBudgetAction = BudgetAction::DECREASED;
+        logFrameTiming();
+    }
+    else if(avgFps < fpsDecreaseThresholdModerate && negotiatedBudget > kMinBudget) {
+        // Moderate lag: gentle reduction
+        size_t oldBudget = negotiatedBudget;
+        requestLowerBudget(2);  // Reduce by 1k (2 × 500)
+        
+        SDL_Log("[PathBudget] Cycle %d: Average FPS below 58: %.1f FPS - reducing budget moderately (2 steps × 500) %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        logPerformance("[PathBudget] Cycle %d: Average FPS below 58: %.1f FPS - reducing budget moderately %zu -> %zu", 
+                gameCycleCount, avgFps, oldBudget, negotiatedBudget);
+        
+        lastBudgetAction = BudgetAction::DECREASED;
+        logFrameTiming();
+    }
+    // RAISE: If average FPS stable at 59.5+ AND pathfinding isn't consuming too much time
+    else if(avgFps >= fpsIncreaseThreshold && negotiatedBudget < kMaxBudget) {
+        // ANTI-OSCILLATION: Don't increase if we just increased last cycle
+        // This ensures at least 2 intervals (12 seconds) between increases
+        if(lastBudgetAction == BudgetAction::INCREASED) {
+            SDL_Log("[PathBudget] Cycle %d: Skipping increase - just increased last check (anti-oscillation)", 
+                    gameCycleCount);
+            logPerformance("[PathBudget] Cycle %d: Skipping increase - stabilizing after last increase", 
+                    gameCycleCount);
+            lastBudgetAction = BudgetAction::NONE;  // Reset for next cycle
+            return;
+        }
+        
+        const size_t queueDepth = pathRequestQueue.size();
+        
+        // Check average pathfinding time per frame over the interval
+        // Use frameTiming.pathfindingMs (cumulative) not pathfindingMsThisFrame (single frame)
+        const double avgPathfindingMs = (frameTiming.frameCount > 0) 
+            ? (frameTiming.pathfindingMs / frameTiming.frameCount) 
+            : 0.0;
+        
+        // Safety check: don't increase if pathfinding is already eating too much time
+        if(avgPathfindingMs > 10.0) {
+            SDL_Log("[PathBudget] Cycle %d: FPS=%.1f but pathfinding time too high (%.1fms) - blocking budget increase", 
+                    gameCycleCount, avgFps, avgPathfindingMs);
+            logPerformance("[PathBudget] Cycle %d: FPS=%.1f but pathfinding time too high (%.1fms) - blocking budget increase", 
+                    gameCycleCount, avgFps, avgPathfindingMs);
+            lastBudgetAction = BudgetAction::NONE;
+        } else {
+            // KEY INSIGHT: High queue + good FPS = we have CPU headroom to drain the queue!
+            // Use consistent 500 token increments with 12-second spacing to prevent oscillation
+            size_t oldBudget = negotiatedBudget;
+            size_t increaseAmount = 500;  // Always 500, but with anti-oscillation delay
+            const char* increaseReason = (queueDepth > 300) ? "queue>300" : "queue<=300";
+            
+            size_t newBudget = std::min<size_t>(negotiatedBudget + increaseAmount, kMaxBudget);
+            
+            SDL_Log("[PathBudget] Cycle %d: %s FPS>=59.5 (%.1f) pathfinding=%.1fms queue=%zu - increasing budget %zu -> %zu", 
+                    gameCycleCount, increaseReason, avgFps, avgPathfindingMs, queueDepth, oldBudget, newBudget);
+            logPerformance("[BUDGET CHANGE] Cycle %d: %s - %zu -> %zu tokens/cycle (FPS=%.1f, pathfinding=%.1fms, queue=%zu)",
+                    gameCycleCount, increaseReason, oldBudget, newBudget, avgFps, avgPathfindingMs, queueDepth);
+            
+            negotiatedBudget = newBudget;
+            carryOverTokens = 0;  // Reset carry-over when budget changes
+            lastBudgetAction = BudgetAction::INCREASED;  // Track action
+            
+            SDL_Log("[PathBudget] Applied immediately - new budget=%zu", negotiatedBudget);
+            logPerformance("[BUDGET CHANGE] Cycle %d: Applied immediately - new budget=%zu", 
+                    gameCycleCount, negotiatedBudget);
+        }
+    }
+    // NOTE: Don't reset lastBudgetAction when FPS is stable (60-80)!
+    // We need to preserve the action state for anti-oscillation to work.
+    // lastBudgetAction is only reset after we've skipped an increase cycle.
+}
+
+void Game::sendStatsToHost(float avgFps, float simMsAvg, size_t queueDepth, size_t currentBudget) {
+    if(pNetworkManager == nullptr) {
+        return;  // Single-player, nothing to send
+    }
+    
+    // Host doesn't need to send stats to itself (it computes them locally in makeHostBudgetDecision)
+    if(pNetworkManager->isServer()) {
+        return;  // Host, nothing to send
+    }
+    
+    // LOGGING: Outbound stats to host (before sending)
+    SDL_Log("[PathBudget CLIENT] → OUTBOUND to host: FPS=%.1f, SimAvg=%.2fms, queue=%zu, budget=%zu (cycle %d)",
+            avgFps, simMsAvg, queueDepth, currentBudget, gameCycleCount);
+    logPerformance("[CLIENT OUTBOUND] Cycle %d: Sending stats to host: FPS=%.1f, SimAvg=%.2fms, queue=%zu, budget=%zu, carryOver=%zu",
+            gameCycleCount, avgFps, simMsAvg, queueDepth, currentBudget, carryOverTokens);
+    
+    // Send via NetworkManager (including simulation timing)
+    pNetworkManager->sendClientStats(avgFps, simMsAvg, queueDepth, currentBudget, gameCycleCount);
+    
+    SDL_Log("[PathBudget CLIENT] ✓ Stats sent to host");
+    logPerformance("[CLIENT OUTBOUND] Cycle %d: Stats packet sent successfully", gameCycleCount);
+}
+
+void Game::handleClientStats(Uint32 clientId, Uint32 gameCycle, float avgFps, float simMsAvg, Uint32 queueDepth, Uint32 currentBudget) {
+    // HOST ONLY: Collect stats from clients
+    if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
+        return;  // Only host processes client stats
+    }
+    
+    // Store client stats
+    ClientPerformanceStats stats;
+    stats.clientId = clientId;
+    stats.lastUpdateCycle = gameCycle;
+    stats.avgFps = avgFps;
+    stats.simMsAvg = simMsAvg;  // POST-VSYNC: Primary metric for CPU load
+    stats.queueDepth = queueDepth;  // Instantaneous at cycle boundary
+    stats.currentBudget = currentBudget;
+    stats.missedUpdates = 0;  // Reset counter on successful receive
+    
+    clientStats[clientId] = stats;
+    
+    // LOGGING: Inbound client stats
+    SDL_Log("[PathBudget HOST] ← INBOUND from Client %d: FPS=%.1f, SimAvg=%.2fms, queue=%d, budget=%d (cycle %d)",
+            clientId, avgFps, simMsAvg, queueDepth, currentBudget, gameCycle);
+    logPerformance("[HOST INBOUND] Cycle %d: Client %d stats: FPS=%.1f, SimAvg=%.2fms, queue=%d, budget=%d",
+            gameCycleCount, clientId, avgFps, simMsAvg, queueDepth, currentBudget);
+    
+    // Mark that we received stats from this client
+    // Don't immediately make a decision - wait for checkBudgetAdjustment to trigger it
+}
+
+bool Game::haveStatsFromAllClients() const {
+    // NOTE: This function is currently unused since we switched to time-based decision making
+    // The host makes decisions every kBudgetCheckInterval, not when all stats arrive
+    // Missing stats are handled by handleMissingClientStats() which uses stale data
+    
+    if(pNetworkManager == nullptr) {
+        return false;
+    }
+    
+    // TODO: If we ever need this again, implement getConnectedClientCount()
+    // const size_t expectedClientCount = pNetworkManager->getConnectedClientCount();
+    // return clientStats.size() >= expectedClientCount;
+    
+    return false;  // Unused
+}
+
+void Game::handleMissingClientStats() {
+    // HOST ONLY: Handle clients that haven't sent stats
+    if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
+        return;
+    }
+    
+    for(auto& [clientId, stats] : clientStats) {
+        const Uint32 cyclesSinceLastUpdate = gameCycleCount - stats.lastUpdateCycle;
+        
+        // Clients send stats one cycle BEFORE the check interval
+        // So we expect stats every kBudgetCheckInterval cycles, but they arrive at (interval - 1)
+        // If stats are older than (kBudgetCheckInterval + a few grace cycles), they're stale
+        if(cyclesSinceLastUpdate > kBudgetCheckInterval + 5) {
+            stats.missedUpdates++;
+            
+            SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+                "[PathBudget] Client %d stats are stale (last update: %d cycles ago, missed: %d)",
+                clientId, cyclesSinceLastUpdate, stats.missedUpdates);
+            
+            // After 3 consecutive missed updates (3 × 7.5s = 22.5 seconds)
+            if(stats.missedUpdates >= 3) {
+                // Assume worst-case: client is struggling
+                SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                    "[PathBudget] Client %d has missed 3+ updates - assuming poor performance",
+                    clientId);
+                logPerformance("[PathBudget] Cycle %d: Client %d stale (missed %d) - forcing reduction",
+                        gameCycleCount, clientId, stats.missedUpdates);
+                
+                // Force FPS to 0 to trigger reduction
+                stats.avgFps = 0.0f;
+                stats.queueDepth = 1000;  // Assume high queue
+            }
+            // After 2 missed updates: reuse last known values but log warning
+            else {
+                SDL_Log("[PathBudget] Client %d: Reusing last known values (FPS=%.1f, queue=%d)",
+                        clientId, stats.avgFps, stats.queueDepth);
+                logPerformance("[PathBudget] Cycle %d: Client %d stats reused (missed %d)",
+                        gameCycleCount, clientId, stats.missedUpdates);
+            }
+        }
+    }
+}
+
+void Game::makeHostBudgetDecision() {
+    // HOST ONLY: Decide budget based on ALL client stats + own stats
+    if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
+        return;
+    }
+    
+    // Calculate own stats
+    const double hostFps = (frameTiming.frameCount * 1000.0 / frameTiming.totalMs);
+    const size_t hostQueueDepth = pathRequestQueue.size();  // Instantaneous
+    
+    // If we have no client stats yet (first interval), only use host's own stats
+    // This is safe because clients send stats one cycle early, so after the first interval
+    // we'll always have client data. For the very first decision, host-only is acceptable.
+    if(clientStats.empty()) {
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+            "[PathBudget HOST] First decision with no client stats yet - using host-only (FPS=%.1f, queue=%zu)",
+            hostFps, hostQueueDepth);
+        logPerformance("[HOST DECISION] Cycle %d: FIRST INTERVAL (no client stats yet - host-only decision)",
+                gameCycleCount);
+        // Fall through to make decision based on host stats only
+    }
+    
+    // Handle missing client stats (timeout logic)
+    handleMissingClientStats();
+    
+    // Find minimum FPS and maximum CPU load across all peers (slowest peer wins)
+    float minFps = hostFps;
+    size_t maxQueueDepth = hostQueueDepth;
+    float maxSimMsAvg = frameTiming.simMsAvg;  // Track worst CPU load
+    
+    // Track desync status
+    bool allClientsSynced = true;
+    
+    for(const auto& [clientId, stats] : clientStats) {
+        // Validate budget synchronization (sanity check)
+        if(stats.currentBudget != negotiatedBudget) {
+            SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                "[PathBudget] DESYNC DETECTED! Client %d budget=%d but host=%zu - triggering re-sync",
+                clientId, stats.currentBudget, negotiatedBudget);
+            logPerformance("[DESYNC CRITICAL] Client %d has budget=%d but host has %zu - re-syncing immediately",
+                    clientId, stats.currentBudget, negotiatedBudget);
+            
+            // Immediately re-sync this client
+            resyncClientBudget(clientId);
+            allClientsSynced = false;
+        }
+        
+        // Decision logic uses FPS, queue depth, and CPU load (simMsAvg)
+        if(stats.avgFps < minFps) {
+            minFps = stats.avgFps;  // Track slowest peer (lowest FPS)
+        }
+        if(stats.queueDepth > maxQueueDepth) {
+            maxQueueDepth = stats.queueDepth;
+        }
+        if(stats.simMsAvg > maxSimMsAvg) {
+            maxSimMsAvg = stats.simMsAvg;  // Track highest CPU load
+        }
+    }
+    
+    // If any clients are out of sync, don't make budget changes until they're synced
+    if(!allClientsSynced) {
+        SDL_Log("[PathBudget] Deferring budget decision until all clients re-synced");
+        logPerformance("[PathBudget] Cycle %d: Deferring decision - waiting for client re-sync",
+                gameCycleCount);
+        return;  // Skip this decision cycle
+    }
+    
+    // Decision logic: "Slowest peer wins" - based on FPS AND CPU load
+    size_t newBudget = negotiatedBudget;
+    const char* decisionReason = "STABLE";
+    
+    // VSync-compatible thresholds: 50/55/58 FPS for decrease, 59.5 FPS for increase
+    const double fpsIncreaseThreshold = 59.5;
+    const double fpsDecreaseThresholdModerate = 58.0;
+    const double fpsDecreaseThresholdAggressive = 55.0;
+    const double fpsDecreaseThresholdSevere = 50.0;
+    
+    if(minFps < fpsDecreaseThresholdSevere) {
+        // AT LEAST ONE peer is struggling severely → REDUCE budget massively
+        newBudget = negotiatedBudget >= 4000 + kMinBudget ? 
+                    negotiatedBudget - 4000 : kMinBudget;
+        decisionReason = "REDUCE (FPS<50, severe)";
+        lastBudgetAction = BudgetAction::DECREASED;  // Track action for multiplayer sync
+    }
+    else if(minFps < fpsDecreaseThresholdAggressive) {
+        // AT LEAST ONE peer is struggling aggressively → REDUCE budget aggressively
+        newBudget = negotiatedBudget >= 2000 + kMinBudget ? 
+                    negotiatedBudget - 2000 : kMinBudget;
+        decisionReason = "REDUCE (FPS<55, aggressive)";
+        lastBudgetAction = BudgetAction::DECREASED;  // Track action for multiplayer sync
+    }
+    else if(minFps < fpsDecreaseThresholdModerate) {
+        // AT LEAST ONE peer is struggling moderately → REDUCE budget moderately
+        newBudget = negotiatedBudget >= 1000 + kMinBudget ? 
+                    negotiatedBudget - 1000 : kMinBudget;
+        decisionReason = "REDUCE (FPS<58, moderate)";
+        lastBudgetAction = BudgetAction::DECREASED;  // Track action for multiplayer sync
+    }
+    else if(maxSimMsAvg > 12.0f) {
+        // AT LEAST ONE peer is CPU-bound (>12ms per 16ms tick) → REDUCE budget
+        // This catches vsync-locked clients that still report 60 FPS but are struggling
+        newBudget = negotiatedBudget >= 2000 + kMinBudget ? 
+                    negotiatedBudget - 2000 : kMinBudget;
+        decisionReason = "REDUCE (high CPU)";
+        lastBudgetAction = BudgetAction::DECREASED;  // Track action for multiplayer sync
+    }
+    else if(minFps > fpsIncreaseThreshold && negotiatedBudget < kMaxBudget) {
+        // ALL peers have good FPS → consider INCREASE
+        
+        // ANTI-OSCILLATION: Don't increase if we just increased last cycle
+        if(lastBudgetAction == BudgetAction::INCREASED) {
+            decisionReason = "SKIP (stabilizing after increase)";
+            newBudget = negotiatedBudget;  // Keep current
+            lastBudgetAction = BudgetAction::NONE;  // Reset for next cycle
+        } else {
+            // Check host's pathfinding time as a safety metric
+            // Use frameTiming.pathfindingMs (cumulative) not pathfindingMsThisFrame (single frame)
+            const double avgPathfindingMs = (frameTiming.frameCount > 0) 
+                ? (frameTiming.pathfindingMs / frameTiming.frameCount) 
+                : 0.0;
+            
+            if(avgPathfindingMs > 10.0) {
+                // Pathfinding taking too much time - don't increase
+                decisionReason = "BLOCKED (pathfinding>10ms)";
+                newBudget = negotiatedBudget;  // Keep current
+                lastBudgetAction = BudgetAction::NONE;
+            } else {
+                // KEY INSIGHT: High queue + good FPS = we have CPU headroom!
+                // Use consistent 500 token increments with 12-second spacing to prevent oscillation
+                size_t increaseAmount = 500;  // Always 500, anti-oscillation via lastBudgetAction
+                decisionReason = (maxQueueDepth > 300) ? "INCREASE (queue>300)" : "INCREASE (queue<=300)";
+                
+                newBudget = std::min<size_t>(negotiatedBudget + increaseAmount, kMaxBudget);
+                lastBudgetAction = BudgetAction::INCREASED;  // Track action for all clients
+            }
+        }
+    }
+    else {
+        // Stable - no change needed
+        decisionReason = "STABLE (FPS in range)";
+        // NOTE: Don't reset lastBudgetAction! Preserve it for anti-oscillation.
+    }
+    
+    // LOGGING: Only log on actual budget changes (reduce host overhead)
+    if(newBudget != negotiatedBudget) {
+        SDL_Log("[PathBudget HOST] ═══ BUDGET CHANGE CYCLE %d ═══", gameCycleCount);
+        SDL_Log("[PathBudget HOST] Inputs: minFps=%.1f (host=%.1f), maxQueue=%zu (host=%zu)",
+                minFps, hostFps, maxQueueDepth, hostQueueDepth);
+        SDL_Log("[PathBudget HOST] Decision: %s → %zu → %zu",
+                decisionReason, negotiatedBudget, newBudget);
+        logPerformance("[HOST DECISION] Cycle %d: %s %zu → %zu (minFps=%.1f, maxQueue=%zu)",
+                gameCycleCount, decisionReason, negotiatedBudget, newBudget, minFps, maxQueueDepth);
+        
+        broadcastBudgetChange(newBudget);
+    }
+    // Silent when stable (no logging overhead)
+    
+    // Don't clear clientStats! We need to keep them to detect missing updates
+    // The stats will be updated when new packets arrive (missedUpdates reset to 0)
+}
+
+void Game::broadcastBudgetChange(size_t newBudget) {
+    // HOST ONLY: Broadcast budget change to all clients
+    if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
+        return;
+    }
+    
+    // Calculate apply cycle: NEXT interval boundary (e.g., cycle 750 if we're at cycle 375)
+    // This gives a full interval (375 cycles) for the broadcast to reach all clients
+    // and ensures budget changes always align with measurement windows
+    const Uint32 nextInterval = ((gameCycleCount / kBudgetCheckInterval) + 1) * kBudgetCheckInterval;
+    const Uint32 applyCycle = nextInterval;
+    
+    // LOGGING: Outbound budget broadcast (before sending)
+    SDL_Log("[PathBudget HOST] → OUTBOUND to ALL clients: budget %zu → %zu (apply cycle %d)",
+            negotiatedBudget, newBudget, applyCycle);
+    logPerformance("[HOST OUTBOUND] Cycle %d: Broadcasting budget %zu → %zu (apply cycle %d)",
+            gameCycleCount, negotiatedBudget, newBudget, applyCycle);
+    
+    // Send via NetworkManager broadcast to all clients
+    pNetworkManager->broadcastPathBudget(newBudget, applyCycle);
+    
+    // Also queue locally (host applies the same change)
+    handleSetPathBudget(newBudget, applyCycle);
+    
+    SDL_Log("[PathBudget HOST] ✓ Broadcast sent to all clients and queued locally");
+    logPerformance("[HOST OUTBOUND] Cycle %d: Broadcast sent successfully",
+            gameCycleCount);
+}
+
+void Game::resyncClientBudget(Uint32 clientId) {
+    // HOST ONLY: Emergency re-sync for out-of-sync client
+    if(pNetworkManager == nullptr || !pNetworkManager->isServer()) {
+        return;
+    }
+    
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION,
+        "[PathBudget] Re-syncing client %d with current budget %zu",
+        clientId, negotiatedBudget);
+    
+    // Send immediate sync packet (apply at next interval boundary)
+    // Even for desyncs, we apply at the next interval to maintain determinism
+    const Uint32 nextInterval = ((gameCycleCount / kBudgetCheckInterval) + 1) * kBudgetCheckInterval;
+    const Uint32 applyCycle = nextInterval;
+    
+    // NOTE: For now, we broadcast to all clients (since ENet doesn't have per-peer send in our current API)
+    // This is safe - extra sync messages won't hurt synchronized clients
+    pNetworkManager->broadcastPathBudget(negotiatedBudget, applyCycle);
+    
+    SDL_Log("[PathBudget HOST] ✓ Re-sync broadcast sent to all clients (including client %d)", clientId);
+    logPerformance("[DESYNC RECOVERY] Cycle %d: Sent re-sync broadcast to all clients (budget=%zu, apply cycle %d)",
+            gameCycleCount, negotiatedBudget, applyCycle);
+}
+
+void Game::handleSetPathBudget(size_t newBudget, Uint32 applyCycle) {
+    // ALL CLIENTS: Queue the budget change for deterministic application
+    
+    // LOGGING: Inbound budget order from host
+    SDL_Log("[PathBudget CLIENT] ← INBOUND from host: budget %zu → %zu (apply cycle %d, current cycle %d, delta=%d cycles)",
+            negotiatedBudget, newBudget, applyCycle, gameCycleCount, 
+            (int)(applyCycle - gameCycleCount));
+    logPerformance("[CLIENT INBOUND] Cycle %d: Received budget order %zu → %zu (apply cycle %d, carryOver=%zu)",
+            gameCycleCount, negotiatedBudget, newBudget, applyCycle, carryOverTokens);
+    
+    // Store in pending commands queue
+    PendingBudgetChange change;
+    change.newBudget = newBudget;
+    change.applyCycle = applyCycle;
+    change.resetCarryOver = true;  // CRITICAL: Must clear carry-over tokens!
+    pendingBudgetChanges.push_back(change);
+    
+    SDL_Log("[PathBudget CLIENT] ✓ Budget order queued (pending: %zu)",
+            pendingBudgetChanges.size());
+}
+
+void Game::applyPendingBudgetChanges() {
+    // Called every cycle to check for pending budget changes
+    
+    auto it = pendingBudgetChanges.begin();
+    while(it != pendingBudgetChanges.end()) {
+        if(gameCycleCount >= it->applyCycle) {
+            // Apply budget change NOW
+            size_t oldBudget = negotiatedBudget;
+            negotiatedBudget = std::clamp(it->newBudget, kMinBudget, kMaxBudget);
+            
+            // CRITICAL FOR SYNC: Reset carry-over tokens on budget change
+            // Without this, clients can drift due to accumulated token differences
+            size_t oldCarryOver = carryOverTokens;
+            if(it->resetCarryOver) {
+                carryOverTokens = 0;
+            }
+            
+            // LOGGING: Budget application
+            SDL_Log("[PathBudget] ★ APPLIED budget change at cycle %d: %zu → %zu (carryOver %zu → 0)",
+                    gameCycleCount, oldBudget, negotiatedBudget, oldCarryOver);
+            logPerformance("[BUDGET APPLIED] Cycle %d: %zu → %zu tokens/cycle (carryOver %zu → 0, queue=%zu)",
+                    gameCycleCount, oldBudget, negotiatedBudget, oldCarryOver, pathRequestQueue.size());
+            
+            // Log full performance report on budget change
+            logFrameTiming();
+            
+            // Remove from pending queue
+            it = pendingBudgetChanges.erase(it);
+        } else {
+            ++it;
+        }
     }
 }
 
@@ -563,6 +1576,27 @@ void Game::doInput()
             SDL_MouseMotionEvent* mouse = &event.motion;
             drawnMouseX = std::max(0, std::min(mouse->x, settings.video.width-1));
             drawnMouseY = std::max(0, std::min(mouse->y, settings.video.height-1));
+
+            static Uint32 lastCursorLog = 0;
+            // Cursor debug logging disabled
+            /*const Uint32 now = SDL_GetTicks();
+            if(now - lastCursorLog >= 500) {
+                bool insideMap = (screenborder != nullptr) && screenborder->isScreenCoordInsideMap(drawnMouseX, drawnMouseY);
+                int mapX = insideMap ? screenborder->screen2MapX(drawnMouseX) : -1;
+                int mapY = insideMap ? screenborder->screen2MapY(drawnMouseY) : -1;
+                SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                               "CursorDebug: raw=(%d,%d) drawn=(%d,%d) mapInside=%s map=(%d,%d) cursorMode=%d hardware=%s",
+                               mouse->x,
+                               mouse->y,
+                               drawnMouseX,
+                               drawnMouseY,
+                               insideMap ? "yes" : "no",
+                               mapX,
+                               mapY,
+                               static_cast<int>(currentCursorMode),
+                               cursorManager.isInitialized() ? "yes" : "no");
+                lastCursorLog = now;
+            }*/
         }
 
         if(pInGameMenu != nullptr) {
@@ -902,89 +1936,243 @@ void Game::runMainLoop() {
     SDL_Log("Starting game...");
     initializeGameLoop();
 
-    const int MAX_UPDATES_PER_FRAME = 5;
-    const Uint32 MIN_FRAME_TIME = 1;  // Minimum 1ms between frames to prevent CPU overload
-    
-    Uint32 lastGameCycle = SDL_GetTicks();
-    Uint32 accumulator = 0;
-    bool wasMenuOpen = false;
-    
+    int frameStart = SDL_GetTicks();
+    int frameTime = 0;
+
     do {
-        const Uint32 frameStart = SDL_GetTicks();
-        const Uint32 frameTime = frameStart - lastGameCycle;
-        lastGameCycle = frameStart;
+        // Start timing this rendered frame
+        const Uint64 frameStartPerf = SDL_GetPerformanceCounter();
+        frameTiming.gameCyclesThisFrame = 0;
+        frameTiming.totalPathsProcessedThisFrame = 0;
         
-        // Check for menu state changes
-        bool isMenuOpen = (pInGameMenu != nullptr) || (pInGameMentat != nullptr) || (pWaitingForOtherPlayers != nullptr);
-        if (isMenuOpen != wasMenuOpen) {
-            accumulator = 0;
-            lastGameCycle = frameStart;
-            wasMenuOpen = isMenuOpen;
+        // Reset per-frame accumulators
+        frameTiming.aiMsThisFrame = 0.0;
+        frameTiming.unitsMsThisFrame = 0.0;
+        frameTiming.structuresMsThisFrame = 0.0;
+        frameTiming.pathfindingMsThisFrame = 0.0;
+        frameTiming.renderingMsThisFrame = 0.0;
+        frameTiming.networkWaitMsThisFrame = 0.0;
+        frameTiming.turretScanMsThisFrame = 0.0;
+        frameTiming.turretScansThisFrame = 0;
+        frameTiming.unitTargetingMsThisFrame = 0.0;
+        frameTiming.unitNavigateMsThisFrame = 0.0;
+        frameTiming.unitMoveMsThisFrame = 0.0;
+        frameTiming.unitTurnMsThisFrame = 0.0;
+        frameTiming.unitVisibilityMsThisFrame = 0.0;
+        
+        // MULTIPLAYER FIX (Issue #1): Removed time-based pathfinding budget
+        // Token budget is now the only gate (deterministic)
+        
+        renderFrame();
+
+        const int frameEnd = SDL_GetTicks();
+        const int actualFrameTime = frameEnd - frameStart;  // Actual time for this frame
+        frameTime += actualFrameTime;
+        frameStart = frameEnd;  // Reset for next frame's game logic timing
+
+        if(bShowFPS) {
+            // FPS display uses actual frame time
+            averageFrameTime = 0.99f * averageFrameTime + 0.01f * actualFrameTime;
         }
-        
-        if (!isMenuOpen) {
-            accumulator += std::min(frameTime, Uint32(200));  // Cap at 200ms to prevent spiral of death
+
+        // MULTIPLAYER FIX (Issue #9): Removed duplicate finished level check
+        // This is already handled in updateGameState() with cycle-based timing
+
+        if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
+            takeScreenshot();
         }
-        
-        // Process all input through normal game loop
-        processInput();
-        
-        bool bWaitForNetwork = false;
-        if(pNetworkManager != nullptr) {
-            bWaitForNetwork = handleNetworkUpdates();
-        }
-        
+
         if(bReplay && !bPause) {
             skipToGameCycle = gameCycleCount + (10*1000)/GAMESPEED_DEFAULT;
         }
+
+        // DIAGNOSTIC: Track loop iterations
+        int loopIterations = 0;
+        int cyclesExecuted = 0;
         
-        if(!bPause && !bWaitForNetwork && !bMenu) {
-            if(skipToGameCycle != INVALID_GAMECYCLE) {
-                int updates = 0;
-                while((gameCycleCount < skipToGameCycle) && (updates < MAX_UPDATES_PER_FRAME)) {
-                    processNetwork();
-                    updateGameState();
-                    updates++;
+        // PHASE 1.3: CYCLE GUARDRAIL - Prevent renderer starvation
+        static constexpr int kMaxCyclesPerFrame = 10;
+        
+        while(((frameTime > getGameSpeed()) || (!finished && (gameCycleCount < skipToGameCycle))) 
+              && cyclesExecuted < kMaxCyclesPerFrame) {
+            loopIterations++;
+            
+            Uint64 networkWaitStart = SDL_GetPerformanceCounter();
+            bool bWaitForNetwork = false;
+            if(pNetworkManager != nullptr) {
+                bWaitForNetwork = handleNetworkUpdates();
+            }
+
+            processInput();
+
+            if(pInGameMentat != nullptr) {
+                pInGameMentat->update();
+            }
+
+            if(pWaitingForOtherPlayers != nullptr) {
+                pWaitingForOtherPlayers->update();
+            }
+
+            cmdManager.update();
+
+            if(!bWaitForNetwork && !bPause) {
+                // Time the core simulation step for CPU load detection
+                const Uint64 simStart = SDL_GetPerformanceCounter();
+                updateGameState();
+                const Uint64 simEnd = SDL_GetPerformanceCounter();
+                const double simMs = getElapsedMs(simStart, simEnd);
+                
+                // Update exponential moving average (0.9/0.1 split ≈ 10-tick average)
+                frameTiming.simMsAvg = 0.9 * frameTiming.simMsAvg + 0.1 * simMs;
+                
+                // Update lagging flag with hysteresis
+                static constexpr double kSimThresholdHigh = 12.0;  // ms
+                static constexpr double kSimThresholdLow = 10.0;   // ms
+                
+                if (frameTiming.simMsAvg > kSimThresholdHigh) {
+                    frameTiming.simulationLagging = true;
+                } else if (frameTiming.simMsAvg < kSimThresholdLow) {
+                    frameTiming.simulationLagging = false;
                 }
                 
-                if(gameCycleCount >= skipToGameCycle) {
-                    skipToGameCycle = INVALID_GAMECYCLE;
-                }
-            } else {
-                const float speedFactor = std::pow(5.0f, (float(settings.gameOptions.gameSpeed) - float(GAMESPEED_MAX/2)) / (GAMESPEED_MAX/2));
-                const Uint32 updateInterval = Uint32(GAMESPEED_DEFAULT * speedFactor);
-                int updates = 0;
+                frameTiming.gameCyclesThisFrame++;
+                cyclesExecuted++;
                 
-                while(accumulator >= updateInterval && updates < MAX_UPDATES_PER_FRAME) {
-                    processNetwork();
-                    updateGameState();
-                    accumulator -= updateInterval;
-                    updates++;
+                // Only decrement frameTime when we actually processed a cycle
+                if(gameCycleCount <= skipToGameCycle) {
+                    frameTime = 0;
+                } else {
+                    frameTime -= getGameSpeed();
+                }
+            } else if(bWaitForNetwork || bPause) {
+                // When waiting for network or paused, measure the wait time
+                if(bWaitForNetwork) {
+                    Uint64 networkWaitEnd = SDL_GetPerformanceCounter();
+                    const double networkWaitMs = getElapsedMs(networkWaitStart, networkWaitEnd);
+                    frameTiming.networkWaitMs += networkWaitMs;
+                    frameTiming.networkWaitMsThisFrame += networkWaitMs;
+                    if(networkWaitMs > frameTiming.maxNetworkWaitMs) frameTiming.maxNetworkWaitMs = networkWaitMs;
+                }
+                else if (bPause){
+                    // Pause in single player shouldn't jump after resuming
+                    frameTime = 0;
+                }
+                // Break out of loop to avoid spinning - we'll try again next frame
+                // Also add a small delay to avoid burning CPU
+                SDL_Delay(1);
+                break;
+            }
+        }
+        
+        // PHASE 1.3: DETECT GUARDRAIL TRIPS & REQUEST LOWER BUDGET
+        if(cyclesExecuted >= kMaxCyclesPerFrame) {
+            cycleGuardrailTrips++;
+            
+            // Log guardrail trip to performance file only at key thresholds
+            if(cycleGuardrailTrips % 100 == 0) {
+                logPerformance("[GUARDRAIL] Cycle %d: Hit limit %d times (10 cycles/frame) - queue=%zu, budget=%zu",
+                        gameCycleCount, cycleGuardrailTrips, pathRequestQueue.size(), negotiatedBudget);
+            }
+            
+            // Log to console periodically
+            if((gameCycleCount % MILLI2CYCLES(5000)) == 0) {
+                SDL_Log("[Guardrail] Hit cycle limit (%d cycles/frame), queue=%zu, trips=%d",
+                        kMaxCyclesPerFrame, pathRequestQueue.size(), cycleGuardrailTrips);
+            }
+            
+            // CHANGED: Only reduce budget after SUSTAINED poor performance
+            // 300 guardrail trips = ~300 frames = ~5 seconds at 60 FPS
+            // This prevents reacting to temporary spikes
+            if(cycleGuardrailTrips >= 300) {
+                SDL_Log("[PathBudget] Sustained poor performance detected (%d guardrail trips over ~300 frames)", cycleGuardrailTrips);
+                requestLowerBudget();
+                cycleGuardrailTrips = 0;  // Reset counter
+            }
+        } else if(cyclesExecuted < 5) {
+            // Running smoothly - aggressively reset counter
+            // Decay faster to forgive temporary spikes
+            if(cycleGuardrailTrips > 0) {
+                cycleGuardrailTrips -= 3;  // Decrease by 3 per smooth frame
+                if(cycleGuardrailTrips < 0) {
+                    cycleGuardrailTrips = 0;
                 }
             }
         }
         
-        renderFrame();
-        
-        const Uint32 totalFrameTime = SDL_GetTicks() - frameStart;
-        if(totalFrameTime < MIN_FRAME_TIME) {
-            SDL_Delay(1);  // Give up timeslice but don't force delay
+        // DIAGNOSTIC: Only log severe issues (removed frequent logging)
+        // Severe frame issues are now captured in the 30-second [PathInstrumentation] report
+        if(loopIterations > 20 || cyclesExecuted > 15) {
+            logPerformance("[DIAGNOSTIC] Severe frame issue: %d loop iterations, %d cycles executed, gameCycle=%d", 
+                loopIterations, cyclesExecuted, gameCycleCount);
         }
         
-        if(bShowFPS) {
-            averageFrameTime = 0.99f * averageFrameTime + 0.01f * totalFrameTime;
+        // PERIODIC STATUS SNAPSHOT: Every 60 seconds of game time (reduced from 15s)
+        if((gameCycleCount % MILLI2CYCLES(60000)) == 0 && gameCycleCount > 0) {
+            const double avgFps = frameTiming.frameCount > 0 ? 
+                (frameTiming.frameCount * 1000.0 / frameTiming.totalMs) : 0.0;
+            const double tokensPerCycle = frameTiming.totalGameCycles > 0 ?
+                static_cast<double>(frameTiming.totalPathTokens) / frameTiming.totalGameCycles : 0.0;
+            
+            const int mapSize = (currentGameMap != nullptr) ? currentGameMap->getSizeX() : 0;
+            logPerformance("[STATUS] Cycle %d (%.1f min) - Map: %dx%d | FPS: %.1f | Budget: %zu | Queue: %zu | Tokens/cycle: %.0f",
+                    gameCycleCount,
+                    gameCycleCount / (60.0 * MILLI2CYCLES(1000)),
+                    mapSize, mapSize,
+                    avgFps,
+                    negotiatedBudget,
+                    pathRequestQueue.size(),
+                    tokensPerCycle);
         }
-        
-        if(finished && (SDL_GetTicks() - finishedLevelTime > END_WAIT_TIME)) {
-            finishedLevel = true;
-        }
-        
-        if(takePeriodicalScreenshots && ((gameCycleCount % (MILLI2CYCLES(10*1000))) == 0)) {
-            takeScreenshot();
-        }
-        
+
         musicPlayer->musicCheck();
+
+        // End timing this rendered frame
+        const Uint64 frameEndPerf = SDL_GetPerformanceCounter();
+        const double thisFrameMs = getElapsedMs(frameStartPerf, frameEndPerf);
+        frameTiming.totalMs += thisFrameMs;
+        frameTiming.totalGameCycles += frameTiming.gameCyclesThisFrame;
+        frameTiming.totalTurretScans += frameTiming.turretScansThisFrame;
+        frameTiming.turretScanMs += frameTiming.turretScanMsThisFrame;
+        frameTiming.frameCount++;
         
+        // Track max values
+        if(thisFrameMs > frameTiming.maxTotalMs) frameTiming.maxTotalMs = thisFrameMs;
+        if(frameTiming.gameCyclesThisFrame > frameTiming.maxGameCyclesPerFrame) {
+            frameTiming.maxGameCyclesPerFrame = frameTiming.gameCyclesThisFrame;
+        }
+        if(frameTiming.totalPathsProcessedThisFrame > frameTiming.maxPathsPerFrame) {
+            frameTiming.maxPathsPerFrame = frameTiming.totalPathsProcessedThisFrame;
+        }
+        
+        // Track min values (per frame)
+        if(frameTiming.gameCyclesThisFrame < frameTiming.minGameCyclesPerFrame) {
+            frameTiming.minGameCyclesPerFrame = frameTiming.gameCyclesThisFrame;
+        }
+        if(frameTiming.aiMsThisFrame < frameTiming.minAiMs) frameTiming.minAiMs = frameTiming.aiMsThisFrame;
+        if(frameTiming.unitsMsThisFrame < frameTiming.minUnitsMs) frameTiming.minUnitsMs = frameTiming.unitsMsThisFrame;
+        if(frameTiming.structuresMsThisFrame < frameTiming.minStructuresMs) frameTiming.minStructuresMs = frameTiming.structuresMsThisFrame;
+        if(frameTiming.pathfindingMsThisFrame < frameTiming.minPathfindingMs) frameTiming.minPathfindingMs = frameTiming.pathfindingMsThisFrame;
+        if(frameTiming.renderingMsThisFrame < frameTiming.minRenderingMs) frameTiming.minRenderingMs = frameTiming.renderingMsThisFrame;
+        if(frameTiming.networkWaitMsThisFrame < frameTiming.minNetworkWaitMs) frameTiming.minNetworkWaitMs = frameTiming.networkWaitMsThisFrame;
+        
+        // Track max values (per frame)
+        if(frameTiming.aiMsThisFrame > frameTiming.maxAiMs) frameTiming.maxAiMs = frameTiming.aiMsThisFrame;
+        if(frameTiming.unitsMsThisFrame > frameTiming.maxUnitsMs) frameTiming.maxUnitsMs = frameTiming.unitsMsThisFrame;
+        if(frameTiming.structuresMsThisFrame > frameTiming.maxStructuresMs) frameTiming.maxStructuresMs = frameTiming.structuresMsThisFrame;
+        if(frameTiming.pathfindingMsThisFrame > frameTiming.maxPathfindingMs) frameTiming.maxPathfindingMs = frameTiming.pathfindingMsThisFrame;
+        if(frameTiming.renderingMsThisFrame > frameTiming.maxRenderingMs) frameTiming.maxRenderingMs = frameTiming.renderingMsThisFrame;
+        if(frameTiming.networkWaitMsThisFrame > frameTiming.maxNetworkWaitMs) frameTiming.maxNetworkWaitMs = frameTiming.networkWaitMsThisFrame;
+        if(frameTiming.turretScanMsThisFrame > frameTiming.maxTurretScanMs) frameTiming.maxTurretScanMs = frameTiming.turretScanMsThisFrame;
+        if(frameTiming.turretScanMsThisFrame < frameTiming.minTurretScanMs && frameTiming.turretScansThisFrame > 0) frameTiming.minTurretScanMs = frameTiming.turretScanMsThisFrame;
+        if(frameTiming.turretScansThisFrame > frameTiming.maxTurretScansPerFrame) frameTiming.maxTurretScansPerFrame = frameTiming.turretScansThisFrame;
+        
+        // Log every 2 minutes as backup (reduced from 30s; main logs happen on budget changes)
+        const Uint32 now = SDL_GetTicks();
+        if(now - lastTimingLogMs >= 120000) {
+            logFrameTiming();
+            lastTimingLogMs = now;
+        }
+
     } while (!bQuitGame && !finishedLevel);
 }
 
@@ -1027,6 +2215,8 @@ void Game::initializeGameLoop() {
 }
 
 void Game::renderFrame() {
+    const Uint64 renderStart = SDL_GetPerformanceCounter();
+    
     SDL_SetRenderTarget(renderer, screenTexture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
@@ -1037,6 +2227,11 @@ void Game::renderFrame() {
     SDL_SetRenderTarget(renderer, nullptr);
     SDL_RenderCopy(renderer, screenTexture, nullptr, nullptr);
     SDL_RenderPresent(renderer);
+    
+    const Uint64 renderEnd = SDL_GetPerformanceCounter();
+    const double renderMs = getElapsedMs(renderStart, renderEnd);
+    frameTiming.renderingMs += renderMs;
+    frameTiming.renderingMsThisFrame += renderMs;
 }
 
 void Game::processInput() {
@@ -1058,59 +2253,70 @@ void Game::processInput() {
         return;
     } else if(pWaitingForOtherPlayers != nullptr) {
         if(bMenu == false) {
-                    pWaitingForOtherPlayers.reset();
-                }
+            pWaitingForOtherPlayers.reset();
+        }
         return;
-            }
+    }
 
     // Only update interface and network if no menu is active
-            pInterface->updateObjectInterface();
+    pInterface->updateObjectInterface();
 
     if(pNetworkManager != nullptr && bSelectionChanged) {
-                    pNetworkManager->sendSelectedList(selectedList);
-                    bSelectionChanged = false;
-                }
-            }
-
-void Game::processNetwork() {
-    if(pNetworkManager != nullptr) {
-        bool bWaitForNetwork = handleNetworkUpdates();
-        if(bWaitForNetwork) {
-            return;
-        }
+        pNetworkManager->sendSelectedList(selectedList);
+        bSelectionChanged = false;
     }
 }
 
 void Game::updateGameState() {
     if(bPause) {
         return;
-            }
+    }
 
-            cmdManager.update();
-                pInterface->getRadarView().update();
-                cmdManager.executeCommands(gameCycleCount);
+    pInterface->getRadarView().update();
+    cmdManager.executeCommands(gameCycleCount);
 
-    // Update all houses
+    // Time AI/house updates (this is where QuantBot and other AI runs)
+    Uint64 aiStart = SDL_GetPerformanceCounter();
     for(int i = 0; i < NUM_HOUSES; i++) {
         if(house[i] != nullptr) {
-                        house[i]->update();
-                    }
-                }
+            house[i]->update();
+        }
+    }
+    Uint64 aiEnd = SDL_GetPerformanceCounter();
+    const double aiMs = getElapsedMs(aiStart, aiEnd);
+    frameTiming.aiMs += aiMs;
+    frameTiming.aiMsThisFrame += aiMs;
 
-                screenborder->update();
-                triggerManager.trigger(gameCycleCount);
-                processObjects();
+    screenborder->update();
+    triggerManager.trigger(gameCycleCount);
+    processObjects();
 
     if((indicatorFrame != NONE_ID) && (--indicatorTimer <= 0)) {
-                    indicatorTimer = indicatorTime;
+        indicatorTimer = indicatorTime;
         if(++indicatorFrame > 2) {
-                        indicatorFrame = NONE_ID;
-                    }
-                }
+            indicatorFrame = NONE_ID;
+        }
+    }
 
-                gameCycleCount++;
+    gameCycleCount++;
     
-    if(finished && (SDL_GetTicks() - finishedLevelTime > END_WAIT_TIME)) {
+    // Apply any pending budget changes (deterministic, cycle-based)
+    applyPendingBudgetChanges();
+    
+    // PHASE 1: Cycle-based budget adjustment (deterministic, every 375 cycles ~7.5s at 50Hz)
+    checkBudgetAdjustment();
+    
+    // MULTIPLAYER FIX (Issue #8): Cycle-based combat stats dump (deterministic)
+    // Combat stats logging disabled (broken anti-air analysis)
+    /*if(combatStats.lastDumpCycle == 0) {
+        combatStats.lastDumpCycle = gameCycleCount;
+    } else if((gameCycleCount - combatStats.lastDumpCycle) >= MILLI2CYCLES(30000)) {
+        dumpCombatStats();
+        combatStats.lastDumpCycle = gameCycleCount;
+    }*/
+    
+    // MULTIPLAYER FIX (Issue #9): Cycle-based finished level timer (deterministic)
+    if(finished && (gameCycleCount - finishedLevelCycle > MILLI2CYCLES(END_WAIT_TIME))) {
         finishedLevel = true;
     }
     
@@ -1157,6 +2363,15 @@ void Game::initializeNetwork() {
             std::bind(&Game::onPeerDisconnected, this, 
             std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
         
+        // Multiplayer budget negotiation callbacks
+        pNetworkManager->setOnReceiveClientStats(
+            std::bind(&Game::handleClientStats, this,
+            std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, 
+            std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+        pNetworkManager->setOnReceiveSetPathBudget(
+            std::bind(&Game::handleSetPathBudget, this,
+            std::placeholders::_1, std::placeholders::_2));
+        
         cmdManager.setNetworkCycleBuffer(MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5);
     }
 }
@@ -1165,11 +2380,252 @@ void Game::initializeNetwork() {
 void Game::resumeGame()
 {
     bMenu = false;
-    if(gameType != GameType::CustomMultiplayer) {
-        bPause = false;
+    bPause = false;
+    
+    // Notify other players in multiplayer that we resumed
+    if(pNetworkManager != nullptr) {
+        Player* pLocalPlayer = getPlayerByName(localPlayerName);
+        if(pLocalPlayer != nullptr) {
+            cmdManager.addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLAYER_RESUME));
+            
+            // Remove ourselves from paused players set
+            pausedPlayers.erase(pLocalPlayer->getPlayerID());
+        }
     }
 }
 
+void Game::pauseGame() {
+    bPause = true;
+    
+    // Notify other players in multiplayer that we paused
+    if(pNetworkManager != nullptr) {
+        Player* pLocalPlayer = getPlayerByName(localPlayerName);
+        if(pLocalPlayer != nullptr) {
+            cmdManager.addCommand(Command(pLocalPlayer->getPlayerID(), CMD_PLAYER_PAUSE));
+            
+            // Add ourselves to paused players set
+            pausedPlayers.insert(pLocalPlayer->getPlayerID());
+        }
+    }
+}
+
+void Game::logFrameTiming() {
+    if(frameTiming.frameCount <= 0) {
+        return;
+    }
+    if(bPause) {
+        return;
+    }
+
+    const double avgAi = frameTiming.aiMs / frameTiming.frameCount;
+    const double avgUnits = frameTiming.unitsMs / frameTiming.frameCount;
+    const double avgStructures = frameTiming.structuresMs / frameTiming.frameCount;
+    const double avgPathfinding = frameTiming.pathfindingMs / frameTiming.frameCount;
+    const double avgNetworkWait = frameTiming.networkWaitMs / frameTiming.frameCount;
+    const double avgRendering = frameTiming.renderingMs / frameTiming.frameCount;
+    const double avgTotal = frameTiming.totalMs / frameTiming.frameCount;
+    const double avgFps = avgTotal > 0.0 ? 1000.0 / avgTotal : 0.0;
+    const double maxFps = frameTiming.maxTotalMs > 0.0 ? 1000.0 / frameTiming.maxTotalMs : 0.0;
+    const double avgGameCycles = static_cast<double>(frameTiming.totalGameCycles) / frameTiming.frameCount;
+    
+    // Pathfinding detailed stats
+    const double avgPathsPerFrame = static_cast<double>(frameTiming.totalPathsProcessed) / frameTiming.frameCount;
+    const double avgPathsPerCycle = frameTiming.totalGameCycles > 0 ? 
+        static_cast<double>(frameTiming.totalPathsProcessed) / frameTiming.totalGameCycles : 0.0;
+    const double avgPathfindingPerCycle = frameTiming.totalGameCycles > 0 ? 
+        avgPathfinding / avgGameCycles : 0.0;
+    const double avgMsPerPath = frameTiming.totalPathsProcessed > 0 ? 
+        avgPathfinding / avgPathsPerFrame : 0.0;
+
+    const int mapSize = (currentGameMap != nullptr) ? currentGameMap->getSizeX() : 0;
+    
+    logPerformance("[Performance] === AVERAGES over %d frames ===", frameTiming.frameCount);
+    logPerformance("[Performance] Map: %dx%d | Units: %d", mapSize, mapSize, frameTiming.unitCount);
+    logPerformance("[Performance] FPS: %.1f | Frame: %.2fms",
+        avgFps, avgTotal);
+    logPerformance("[Performance] GameCycles/Frame: min=%d avg=%.1f max=%d",
+        frameTiming.minGameCyclesPerFrame, avgGameCycles, frameTiming.maxGameCyclesPerFrame);
+    logPerformance("[Performance] AI:         min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minAiMs, avgAi, frameTiming.maxAiMs);
+    logPerformance("[Performance] Units:      min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minUnitsMs, avgUnits, frameTiming.maxUnitsMs);
+    
+    // Detailed unit breakdown
+    const double avgTargeting = frameTiming.unitTargetingMs / frameTiming.frameCount;
+    const double avgNavigate = frameTiming.unitNavigateMs / frameTiming.frameCount;
+    const double avgMove = frameTiming.unitMoveMs / frameTiming.frameCount;
+    const double avgTurn = frameTiming.unitTurnMs / frameTiming.frameCount;
+    const double avgVisibility = frameTiming.unitVisibilityMs / frameTiming.frameCount;
+    const double unitsTotal = avgTargeting + avgNavigate + avgMove + avgTurn + avgVisibility;
+    logPerformance("[Performance]   ↳ Targeting:   %.2fms (%.1f%%)", avgTargeting, unitsTotal > 0 ? (avgTargeting/unitsTotal*100) : 0);
+    logPerformance("[Performance]   ↳ Navigate:    %.2fms (%.1f%%)", avgNavigate, unitsTotal > 0 ? (avgNavigate/unitsTotal*100) : 0);
+    logPerformance("[Performance]   ↳ Move:        %.2fms (%.1f%%)", avgMove, unitsTotal > 0 ? (avgMove/unitsTotal*100) : 0);
+    logPerformance("[Performance]   ↳ Turn:        %.2fms (%.1f%%)", avgTurn, unitsTotal > 0 ? (avgTurn/unitsTotal*100) : 0);
+    logPerformance("[Performance]   ↳ Visibility:  %.2fms (%.1f%%)", avgVisibility, unitsTotal > 0 ? (avgVisibility/unitsTotal*100) : 0);
+    
+    logPerformance("[Performance] Structures: min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minStructuresMs, avgStructures, frameTiming.maxStructuresMs);
+    logPerformance("[Performance] Pathfinding: min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minPathfindingMs, avgPathfinding, frameTiming.maxPathfindingMs);
+    logPerformance("[Performance] NetworkWait: min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minNetworkWaitMs, avgNetworkWait, frameTiming.maxNetworkWaitMs);
+    logPerformance("[Performance] Rendering:  min=%.2fms avg=%.2fms max=%.2fms",
+        frameTiming.minRenderingMs, avgRendering, frameTiming.maxRenderingMs);
+    logPerformance("[Performance] Pathfinding Detail: %.1f paths/frame | %.2f paths/cycle | %.2fms/cycle | %.2fms/path",
+        avgPathsPerFrame, avgPathsPerCycle, avgPathfindingPerCycle, avgMsPerPath);
+    
+    // Turret scan detailed stats
+    const double avgTurretScans = static_cast<double>(frameTiming.totalTurretScans) / frameTiming.frameCount;
+    const double avgTurretScanMs = frameTiming.turretScanMs / frameTiming.frameCount;
+    const double avgMsPerTurretScan = frameTiming.totalTurretScans > 0 ? 
+        frameTiming.turretScanMs / frameTiming.totalTurretScans : 0.0;
+    logPerformance("[Performance] Turret Scans: %.1f scans/frame | %.2fms total/frame | %.4fms/scan",
+        avgTurretScans, avgTurretScanMs, avgMsPerTurretScan);
+    logPerformance("[Performance] Turret Scan Range: min=%.2fms max=%.2fms | Peak: %d scans/frame",
+        frameTiming.minTurretScanMs, frameTiming.maxTurretScanMs, frameTiming.maxTurretScansPerFrame);
+    
+    // Phase 1: Token/node statistics
+    const double avgTokensPerFrame = frameTiming.frameCount > 0 ? 
+        static_cast<double>(frameTiming.totalPathTokens) / frameTiming.frameCount : 0.0;
+    logPerformance("[Performance] === TOKEN STATISTICS (Phase 1) ===");
+    logPerformance("[Performance] Tokens/Frame: avg=%.1f max=%zu total=%zu",
+        avgTokensPerFrame, frameTiming.maxPathTokensPerFrame, frameTiming.totalPathTokens);
+    logPerformance("[Performance] Tokens/Cycle: avg=%.1f±%.1f max=%zu",
+        frameTiming.pathTokensPerCycleStats.mean, 
+        frameTiming.pathTokensPerCycleStats.ci95(),
+        frameTiming.maxPathTokensPerCycle);
+    logPerformance("[Performance] Paths/Cycle: avg=%.2f±%.2f",
+        frameTiming.pathsPerCycleStats.mean,
+        frameTiming.pathsPerCycleStats.ci95());
+    
+    // Token distribution per path
+    if(frameTiming.tokensPerCompletedPathStats.sampleCount > 0) {
+        logPerformance("[Performance] Tokens/CompletedPath: avg=%.1f±%.1f min=%zu max=%zu (n=%zu)",
+            frameTiming.tokensPerCompletedPathStats.mean,
+            frameTiming.tokensPerCompletedPathStats.ci95(),
+            frameTiming.minTokensPerCompletedPath,
+            frameTiming.maxTokensPerCompletedPath,
+            frameTiming.tokensPerCompletedPathStats.sampleCount);
+    }
+    if(frameTiming.tokensPerFailedPathStats.sampleCount > 0) {
+        logPerformance("[Performance] Tokens/FailedPath: avg=%.1f±%.1f min=%zu max=%zu (n=%zu)",
+            frameTiming.tokensPerFailedPathStats.mean,
+            frameTiming.tokensPerFailedPathStats.ci95(),
+            frameTiming.minTokensPerFailedPath,
+            frameTiming.maxTokensPerFailedPath,
+            frameTiming.tokensPerFailedPathStats.sampleCount);
+    }
+    
+    // Path completion rates
+    const double pathCompletionRate = frameTiming.totalPathsProcessed > 0 ?
+        (100.0 * (frameTiming.totalPathsProcessed - frameTiming.totalPathsFailed) / frameTiming.totalPathsProcessed) : 0.0;
+    logPerformance("[Performance] Path Completion: %.1f%% (%d completed, %d failed)",
+        pathCompletionRate,
+        frameTiming.totalPathsProcessed - frameTiming.totalPathsFailed,
+        frameTiming.totalPathsFailed);
+    
+    // Token histogram
+    logPerformance("[Performance] Token Histogram: <512:%zu 512-1k:%zu 1k-2k:%zu 2k-4k:%zu 4k-8k:%zu 8k-16k:%zu 16k+:%zu",
+        frameTiming.pathTokenHistogram[0],
+        frameTiming.pathTokenHistogram[1],
+        frameTiming.pathTokenHistogram[2],
+        frameTiming.pathTokenHistogram[3],
+        frameTiming.pathTokenHistogram[4],
+        frameTiming.pathTokenHistogram[5],
+        frameTiming.pathTokenHistogram[6]);
+    
+    // Queue and budget stats
+    logPerformance("[Performance] Queue: maxDepth=%d | BudgetStarvedFrames=%d",
+        frameTiming.maxPathQueueLength,
+        frameTiming.pathBudgetStarvedFrames);
+    
+    // Phase 2: Token budget statistics
+    const double tokensUsedPerCycle = frameTiming.totalGameCycles > 0 ?
+        static_cast<double>(frameTiming.totalPathTokens) / frameTiming.totalGameCycles : 0.0;
+    const double tokenBudgetUtilization = tokensUsedPerCycle / negotiatedBudget * 100.0;
+    logPerformance("[Performance] === TOKEN BUDGET (Phase 1 - Negotiated) ===");
+    logPerformance("[Performance] Budget: %zu tokens/cycle | Avg Used: %.0f (%.1f%% utilization) | Carry-Over: %zu",
+        negotiatedBudget, tokensUsedPerCycle, tokenBudgetUtilization, carryOverTokens);
+    logPerformance("[Performance] Token Budget Exhausted: %d times | Time Budget Exceeded: %d times (safety valve)",
+        frameTiming.tokenBudgetExhaustedCount,
+        frameTiming.timeBudgetExceededCount);
+    
+    // Token-to-time correlation
+    const double tokensPerMs = avgPathfindingPerCycle > 0.0 ? 
+        tokensUsedPerCycle / avgPathfindingPerCycle : 0.0;
+    logPerformance("[Performance] Tokens/Ms: %.0f (measured correlation)", tokensPerMs);
+    
+    logPerformance("[Performance] === PEAKS (worst case) ===");
+    logPerformance("[Performance] FPS: %.1f | Frame: %.2fms | AI: %.2fms | Units: %.2fms | Structures: %.2fms | Pathfinding: %.2fms | NetworkWait: %.2fms | Rendering: %.2fms",
+        maxFps, frameTiming.maxTotalMs,
+        frameTiming.maxAiMs, frameTiming.maxUnitsMs, frameTiming.maxStructuresMs, 
+        frameTiming.maxPathfindingMs, frameTiming.maxNetworkWaitMs, frameTiming.maxRenderingMs);
+    logPerformance("[Performance] Pathfinding Peaks: %d paths/frame | %d paths/cycle | %.2fms/cycle",
+        frameTiming.maxPathsPerFrame, frameTiming.maxPathsPerCycle, frameTiming.maxPathfindingMsPerCycle);
+
+    // Reset counters
+    frameTiming.aiMs = 0.0;
+    frameTiming.unitsMs = 0.0;
+    frameTiming.structuresMs = 0.0;
+    frameTiming.pathfindingMs = 0.0;
+    frameTiming.networkWaitMs = 0.0;
+    frameTiming.renderingMs = 0.0;
+    frameTiming.totalMs = 0.0;
+    frameTiming.totalGameCycles = 0;
+    frameTiming.totalPathsProcessed = 0;
+    frameTiming.totalTurretScans = 0;
+    frameTiming.turretScanMs = 0.0;
+    frameTiming.frameCount = 0;
+    frameTiming.maxAiMs = 0.0;
+    frameTiming.maxUnitsMs = 0.0;
+    frameTiming.maxStructuresMs = 0.0;
+    frameTiming.maxPathfindingMs = 0.0;
+    frameTiming.maxPathfindingMsPerCycle = 0.0;
+    frameTiming.maxNetworkWaitMs = 0.0;
+    frameTiming.maxRenderingMs = 0.0;
+    frameTiming.maxTotalMs = 0.0;
+    frameTiming.maxTurretScanMs = 0.0;
+    frameTiming.maxTurretScansPerFrame = 0;
+    frameTiming.minTurretScanMs = 999999.0;
+    frameTiming.maxGameCyclesPerFrame = 0;
+    frameTiming.maxPathsPerCycle = 0;
+    frameTiming.maxPathsPerFrame = 0;
+    frameTiming.minGameCyclesPerFrame = 999999;
+    frameTiming.minAiMs = 999999.0;
+    frameTiming.minUnitsMs = 999999.0;
+    frameTiming.minStructuresMs = 999999.0;
+    frameTiming.minPathfindingMs = 999999.0;
+    frameTiming.minNetworkWaitMs = 999999.0;
+    frameTiming.minRenderingMs = 999999.0;
+    
+    // Reset unit breakdown
+    frameTiming.unitTargetingMs = 0.0;
+    frameTiming.unitNavigateMs = 0.0;
+    frameTiming.unitMoveMs = 0.0;
+    frameTiming.unitTurnMs = 0.0;
+    frameTiming.unitVisibilityMs = 0.0;
+    
+    // Reset Phase 1 token stats
+    frameTiming.totalPathTokens = 0;
+    frameTiming.maxPathTokensPerCycle = 0;
+    frameTiming.maxPathTokensPerFrame = 0;
+    frameTiming.pathsPerCycleStats.reset();
+    frameTiming.pathTokensPerCycleStats.reset();
+    frameTiming.tokensPerCompletedPathStats.reset();
+    frameTiming.tokensPerFailedPathStats.reset();
+    frameTiming.minTokensPerCompletedPath = SIZE_MAX;
+    frameTiming.maxTokensPerCompletedPath = 0;
+    frameTiming.minTokensPerFailedPath = SIZE_MAX;
+    frameTiming.maxTokensPerFailedPath = 0;
+    
+    // Reset Phase 2 token budget stats
+    frameTiming.tokenBudgetExhaustedCount = 0;
+    frameTiming.timeBudgetExceededCount = 0;
+    frameTiming.pathTokenHistogram = {};
+    frameTiming.maxPathQueueLength = 0;
+    frameTiming.pathBudgetStarvedFrames = 0;
+    frameTiming.totalPathsFailed = 0;
+}
 
 void Game::onOptions()
 {
@@ -1308,6 +2764,11 @@ bool Game::loadSaveGame(const std::string& filename) {
 bool Game::loadSaveGame(InputStream& stream) {
     gameState = GameState::Loading;
 
+    targetRequestQueue.clear();
+    pendingTargetRequestIds.clear();
+    pathRequestQueue.clear();
+    pendingPathRequestIds.clear();
+
     Uint32 magicNum = stream.readUint32();
     if (magicNum != SAVEMAGIC) {
         SDL_Log("Game::loadSaveGame(): No valid savegame! Expected magic number %.8X, but got %.8X!", SAVEMAGIC, magicNum);
@@ -1315,12 +2776,47 @@ bool Game::loadSaveGame(InputStream& stream) {
     }
 
     Uint32 savegameVersion = stream.readUint32();
-    if (savegameVersion != SAVEGAMEVERSION) {
-        SDL_Log("Game::loadSaveGame(): No valid savegame! Expected savegame version %d, but got %d!", SAVEGAMEVERSION, savegameVersion);
+    
+    // Support backward compatibility with version 9705 (pre-Original AI)
+    constexpr Uint32 MINIMUM_SUPPORTED_VERSION = 9705;
+    if (savegameVersion < MINIMUM_SUPPORTED_VERSION || savegameVersion > SAVEGAMEVERSION) {
+        SDL_Log("Game::loadSaveGame(): No valid savegame! Expected savegame version %d-%d, but got %d!", 
+                MINIMUM_SUPPORTED_VERSION, SAVEGAMEVERSION, savegameVersion);
         return false;
     }
+    
+    // Store version for backward-compatible loading
+    this->loadedSavegameVersion = savegameVersion;
 
     std::string duneVersion = stream.readString();
+
+    // Read mod info (version 9806+)
+    std::string savedModName = "vanilla";
+    std::string savedModChecksum = "";
+    if (savegameVersion >= 9806) {
+        savedModName = stream.readString();
+        savedModChecksum = stream.readString();
+        
+        // Check if save was created with a different mod
+        std::string currentModName = ModManager::instance().getActiveModName();
+        std::string currentChecksum = ModManager::instance().getEffectiveChecksums().combined;
+        
+        if (savedModChecksum != currentChecksum) {
+            SDL_Log("Game::loadSaveGame(): Save mod mismatch detected");
+            SDL_Log("  Save mod: %s (checksum: %s)", savedModName.c_str(), savedModChecksum.c_str());
+            SDL_Log("  Current mod: %s (checksum: %s)", currentModName.c_str(), currentChecksum.c_str());
+            
+            // Check if the required mod exists
+            if (!ModManager::instance().modExists(savedModName)) {
+                SDL_Log("Game::loadSaveGame(): Required mod '%s' not found!", savedModName.c_str());
+                // For now, log warning and continue - full enforcement would require UI dialog
+                SDL_Log("Game::loadSaveGame(): WARNING - Loading with different mod may cause issues");
+            } else {
+                SDL_Log("Game::loadSaveGame(): WARNING - Save uses mod '%s' but '%s' is active", 
+                        savedModName.c_str(), currentModName.c_str());
+            }
+        }
+    }
 
     // if this is a multiplayer load we need to save some information before we overwrite gameInitSettings with the settings saved in the savegame
     bool bMultiplayerLoad = (gameInitSettings.getGameType() == GameType::LoadMultiplayer);
@@ -1341,6 +2837,7 @@ bool Game::loadSaveGame(InputStream& stream) {
 
     //create the new map
     currentGameMap = new Map(mapSizeX, mapSizeY);
+    initializeSpatialGrid(mapSizeX, mapSizeY);
 
     //read GameCycleCount
     gameCycleCount = stream.readUint32();
@@ -1469,6 +2966,10 @@ bool Game::saveGame(const std::string& filename)
 
     fs.writeString(VERSIONSTRING);
 
+    // Write mod info for save compatibility (version 9806+)
+    fs.writeString(ModManager::instance().getActiveModName());
+    fs.writeString(ModManager::instance().getEffectiveChecksums().combined);
+
     // write gameInitSettings
     gameInitSettings.save(fs);
 
@@ -1580,6 +3081,42 @@ void Game::selectAll(const std::set<Uint32>& aList)
     }
 }
 
+void Game::selectAllOrnithopters()
+{
+    std::set<Uint32> ornithopterIDs;
+    Coord summedPosition;
+
+    for(UnitBase* pUnit : unitList) {
+        if((pUnit->getOwner() == pLocalHouse) &&
+           (pUnit->getItemID() == Unit_Ornithopter) &&
+           pUnit->isRespondable()) {
+            ornithopterIDs.insert(pUnit->getObjectID());
+            summedPosition += pUnit->getLocation();
+        }
+    }
+
+    if(ornithopterIDs.empty()) {
+        return;
+    }
+
+    unselectAll(selectedList);
+    selectedList.clear();
+
+    for(Uint32 objectID : ornithopterIDs) {
+        ObjectBase* pObject = objectManager.getObject(objectID);
+        if(pObject != nullptr) {
+            pObject->setSelected(true);
+            selectedList.insert(objectID);
+        }
+    }
+
+    selectionChanged();
+    currentCursorMode = CursorMode_Normal;
+
+    Coord averagePosition = summedPosition / static_cast<int>(ornithopterIDs.size());
+    screenborder->setNewScreenCenter(averagePosition * TILESIZE);
+}
+
 
 void Game::unselectAll(const std::set<Uint32>& aList)
 {
@@ -1626,13 +3163,27 @@ void Game::onReceiveSelectionList(const std::string& name, const std::set<Uint32
 
 void Game::onPeerDisconnected(const std::string& name, bool bHost, int cause) {
     pInterface->getChatManager().addInfoMessage(name + " disconnected!");
+    
+    // CRITICAL: Clear all client stats when ANY peer disconnects
+    // Active clients will re-register at the next interval (< 375 cycles)
+    // This is simpler and safer than trying to map player name → clientId
+    if(pNetworkManager != nullptr && pNetworkManager->isServer()) {
+        const size_t removedCount = clientStats.size();
+        clientStats.clear();
+        
+        SDL_Log("[PathBudget HOST] Player '%s' disconnected - cleared all client stats (%zu entries)",
+                name.c_str(), removedCount);
+        SDL_Log("[PathBudget HOST] Active clients will re-register at next interval (< 375 cycles)");
+        logPerformance("[PathBudget] Cycle %d: Cleared %zu client stats due to disconnect (%s) - active clients will re-register",
+                gameCycleCount, removedCount, name.c_str());
+    }
 }
 
 void Game::setGameWon() {
     if(!bQuitGame && !finished) {
         won = true;
         finished = true;
-        finishedLevelTime = SDL_GetTicks();
+        finishedLevelCycle = gameCycleCount;  // MULTIPLAYER FIX (Issue #9): Use cycle count
         soundPlayer->playVoice(YourMissionIsComplete,pLocalHouse->getHouseID());
     }
 }
@@ -1642,7 +3193,7 @@ void Game::setGameLost() {
     if(!bQuitGame && !finished) {
         won = false;
         finished = true;
-        finishedLevelTime = SDL_GetTicks();
+        finishedLevelCycle = gameCycleCount;  // MULTIPLAYER FIX (Issue #9): Use cycle count
         soundPlayer->playVoice(YouHaveFailedYourMission,pLocalHouse->getHouseID());
     }
 }
@@ -1746,6 +3297,17 @@ void Game::handleChatInput(SDL_KeyboardEvent& keyboardEvent) {
                 if (gameType != GameType::CustomMultiplayer) {
                     pInterface->getChatManager().addInfoMessage("You got some credits");
                     pLocalHouse->returnCredits(10000);
+                }
+            } else if(md5string == "0x05362BF626E467A93FFE6FF0D8A899E3") {
+                // Toggle immortality cheat (muaddib) - works in single-player only, no cheat mode required
+                if (gameType != GameType::CustomMultiplayer && gameType != GameType::LoadMultiplayer) {
+                    bool currentState = gameInitSettings.getGameOptions().immortalHumanPlayer;
+                    gameInitSettings.setImmortalHumanPlayer(!currentState);
+                    if(!currentState) {
+                        pInterface->getChatManager().addInfoMessage("God mode: Immortality enabled");
+                    } else {
+                        pInterface->getChatManager().addInfoMessage("God mode: Immortality disabled");
+                    }
                 }
             } else {
                 if(pNetworkManager != nullptr) {
@@ -1946,6 +3508,12 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
             bShowFPS = !bShowFPS;
         } break;
 
+        case SDLK_o: {
+            if((SDL_GetModState() & (KMOD_CTRL | KMOD_ALT | KMOD_GUI)) == 0) {
+                selectAllOrnithopters();
+            }
+        } break;
+
         case SDLK_m: {
             //set object to move
             setCursorMode(CursorMode_Move);
@@ -2054,13 +3622,21 @@ void Game::handleKeyInput(SDL_KeyboardEvent& keyboardEvent) {
         } break;
 
         case SDLK_SPACE: {
-            if(gameType != GameType::CustomMultiplayer) {
-                if(bPause) {
-                    resumeGame();
-                    pInterface->getChatManager().addInfoMessage(_("Game resumed!"));
-                } else {
-                    pauseGame();
-                    pInterface->getChatManager().addInfoMessage(_("Game paused!"));
+            bool isMultiplayer = (gameType == GameType::CustomMultiplayer);
+
+            if(bPause) {
+                resumeGame();
+                const std::string message = _("Game resumed!");
+                pInterface->getChatManager().addInfoMessage(message);
+                if(isMultiplayer && pNetworkManager != nullptr) {
+                    pNetworkManager->sendChatMessage(message);
+                }
+            } else {
+                pauseGame();
+                const std::string message = _("Game paused!");
+                pInterface->getChatManager().addInfoMessage(message);
+                if(isMultiplayer && pNetworkManager != nullptr) {
+                    pNetworkManager->sendChatMessage(message);
                 }
             }
         } break;
@@ -2399,11 +3975,98 @@ bool Game::handleNetworkUpdates() {
                 bMenu = true;
             }
         }
-        SDL_Delay(10);
+        SDL_Delay(1);  // Reduced from 10ms to 1ms to improve host performance
     } else {
         startWaitingForOtherPlayersTime = 0;
-        pWaitingForOtherPlayers.reset();
+        if(pWaitingForOtherPlayers != nullptr) {
+            pWaitingForOtherPlayers.reset();
+            if(pInGameMenu == nullptr && pInGameMentat == nullptr) {
+                bMenu = false;
+            }
+        }
     }
     
     return bWaitForNetwork;
+}
+
+void Game::dumpCombatStats() {
+    SDL_Log("[Combat Stats] ==================== 30-SECOND ANTI-AIR ANALYSIS ====================");
+    
+    // ===== ROCKET TURRETS =====
+    SDL_Log("[Combat Stats] ");
+    SDL_Log("[Combat Stats] === ROCKET TURRETS vs ORNITHOPTERS ===");
+    SDL_Log("[Combat Stats] TARGETING:");
+    SDL_Log("[Combat Stats]   Ornithopters Acquired as Target:  %d", combatStats.rocketTurretTargetsOrni);
+    SDL_Log("[Combat Stats]   Target Lost (out of range/dead):  %d", combatStats.rocketTurretLosesOrniTarget);
+    
+    SDL_Log("[Combat Stats] FIRING OPPORTUNITIES:");
+    const int totalOpportunities = combatStats.orniInRangeCorrectAngle;
+    SDL_Log("[Combat Stats]   Ornithopter in Range + Correct Angle: %d", combatStats.orniInRangeCorrectAngle);
+    SDL_Log("[Combat Stats]   Ornithopter in Range BUT Wrong Angle: %d", combatStats.orniInRangeButWrongAngle);
+    SDL_Log("[Combat Stats]   Actually Fired:                       %d", combatStats.rocketTurretFiresOnOrni);
+    SDL_Log("[Combat Stats]   Blocked by Weapon Timer:              %d", combatStats.rocketTurretFireBlocked);
+    
+    if(totalOpportunities > 0) {
+        const double fireRate = static_cast<double>(combatStats.rocketTurretFiresOnOrni) / totalOpportunities * 100.0;
+        SDL_Log("[Combat Stats]   Fire Success Rate: %.1f%% (%d fired / %d opportunities)", 
+                fireRate, combatStats.rocketTurretFiresOnOrni, totalOpportunities);
+    }
+    
+    SDL_Log("[Combat Stats] ROCKET PERFORMANCE:");
+    SDL_Log("[Combat Stats]   Rockets Spawned:          %d", combatStats.turretRocketsSpawned);
+    SDL_Log("[Combat Stats]   Proximity Detonations:    %d", combatStats.turretRocketsProximityDetonated);
+    SDL_Log("[Combat Stats]   Timer Expirations:        %d", combatStats.turretRocketsExpired);
+    SDL_Log("[Combat Stats]   Rockets Hit Ornithopter:  %d", combatStats.turretRocketsHitOrni);
+    SDL_Log("[Combat Stats]   Rockets Killed Ornithopter: %d", combatStats.turretRocketsKillOrni);
+    
+    if(combatStats.turretRocketsSpawned > 0) {
+        const double hitRate = static_cast<double>(combatStats.turretRocketsHitOrni) / combatStats.turretRocketsSpawned * 100.0;
+        const double killRate = static_cast<double>(combatStats.turretRocketsKillOrni) / combatStats.turretRocketsSpawned * 100.0;
+        SDL_Log("[Combat Stats]   Hit Rate:  %.1f%% (%d hits / %d rockets)", 
+                hitRate, combatStats.turretRocketsHitOrni, combatStats.turretRocketsSpawned);
+        SDL_Log("[Combat Stats]   Kill Rate: %.1f%% (%d kills / %d rockets)", 
+                killRate, combatStats.turretRocketsKillOrni, combatStats.turretRocketsSpawned);
+    }
+    
+    // ===== LAUNCHER UNITS =====
+    SDL_Log("[Combat Stats] ");
+    SDL_Log("[Combat Stats] === LAUNCHER/DEVIATOR UNITS vs ORNITHOPTERS ===");
+    SDL_Log("[Combat Stats] TARGETING:");
+    SDL_Log("[Combat Stats]   Ornithopters Acquired as Target:  %d", combatStats.launcherTargetsOrni);
+    SDL_Log("[Combat Stats]   Shots Fired at Ornithopters:      %d", combatStats.launcherFiresOnOrni);
+    
+    SDL_Log("[Combat Stats] ROCKET PERFORMANCE:");
+    SDL_Log("[Combat Stats]   Rockets Spawned:          %d", combatStats.launcherRocketsSpawned);
+    SDL_Log("[Combat Stats]   Timer Expirations:        %d", combatStats.launcherRocketsExpired);
+    SDL_Log("[Combat Stats]   Rockets Hit Ornithopter:  %d", combatStats.launcherRocketsHitOrni);
+    SDL_Log("[Combat Stats]   Rockets Killed Ornithopter: %d", combatStats.launcherRocketsKillOrni);
+    
+    if(combatStats.launcherRocketsSpawned > 0) {
+        const double hitRate = static_cast<double>(combatStats.launcherRocketsHitOrni) / combatStats.launcherRocketsSpawned * 100.0;
+        const double killRate = static_cast<double>(combatStats.launcherRocketsKillOrni) / combatStats.launcherRocketsSpawned * 100.0;
+        SDL_Log("[Combat Stats]   Hit Rate:  %.1f%% (%d hits / %d rockets)", 
+                hitRate, combatStats.launcherRocketsHitOrni, combatStats.launcherRocketsSpawned);
+        SDL_Log("[Combat Stats]   Kill Rate: %.1f%% (%d kills / %d rockets)", 
+                killRate, combatStats.launcherRocketsKillOrni, combatStats.launcherRocketsSpawned);
+    }
+    
+    // Reset stats
+    combatStats.rocketTurretTargetsOrni = 0;
+    combatStats.rocketTurretLosesOrniTarget = 0;
+    combatStats.orniInRangeButWrongAngle = 0;
+    combatStats.orniInRangeCorrectAngle = 0;
+    combatStats.rocketTurretFiresOnOrni = 0;
+    combatStats.rocketTurretFireBlocked = 0;
+    combatStats.turretRocketsSpawned = 0;
+    combatStats.turretRocketsHitOrni = 0;
+    combatStats.turretRocketsKillOrni = 0;
+    combatStats.turretRocketsExpired = 0;
+    combatStats.turretRocketsProximityDetonated = 0;
+    combatStats.launcherTargetsOrni = 0;
+    combatStats.launcherFiresOnOrni = 0;
+    combatStats.launcherRocketsSpawned = 0;
+    combatStats.launcherRocketsHitOrni = 0;
+    combatStats.launcherRocketsKillOrni = 0;
+    combatStats.launcherRocketsExpired = 0;
+    SDL_Log("[Combat Stats] ================================================================================");
 }

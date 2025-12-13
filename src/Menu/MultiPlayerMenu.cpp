@@ -5,6 +5,7 @@
 
 #include <FileClasses/GFXManager.h>
 #include <FileClasses/TextManager.h>
+#include <FileClasses/INIFile.h>
 
 #include <Network/NetworkManager.h>
 #include <Network/ENetHelper.h>
@@ -12,6 +13,7 @@
 #include <GUI/MsgBox.h>
 
 #include <globals.h>
+#include <main.h>
 
 #include <misc/string_util.h>
 
@@ -30,6 +32,17 @@ MultiPlayerMenu::MultiPlayerMenu() : MenuBase() {
     mainVBox.addWidget(&captionLabel, 24);
     mainVBox.addWidget(VSpacer::create(24));
 
+    // Player name row
+    playerNameHBox.addWidget(Label::create(_("Player Name:")), 100);
+    playerNameTextBox.setText(settings.general.playerName);
+    playerNameTextBox.setMaximumTextLength(20);
+    playerNameHBox.addWidget(&playerNameTextBox, 200);
+    playerNameHBox.addWidget(Spacer::create());
+
+    mainVBox.addWidget(&playerNameHBox, 28);
+    mainVBox.addWidget(VSpacer::create(8));
+
+    // Connect row
     connectHBox.addWidget(Label::create("Host:"), 50);
     connectHostTextBox.setText("localhost");
     connectHBox.addWidget(&connectHostTextBox);
@@ -127,8 +140,55 @@ MultiPlayerMenu::MultiPlayerMenu() : MenuBase() {
 
 
 MultiPlayerMenu::~MultiPlayerMenu() {
+    // Save player name on exit (even if just going back)
+    savePlayerNameToConfig();
     SDL_Log("Stopping network...");
     pNetworkManager.reset();
+}
+
+
+bool MultiPlayerMenu::validateAndSavePlayerName() {
+    std::string name = playerNameTextBox.getText();
+    
+    // Trim whitespace
+    size_t start = name.find_first_not_of(" \t");
+    size_t end = name.find_last_not_of(" \t");
+    if (start == std::string::npos) {
+        name = "";
+    } else {
+        name = name.substr(start, end - start + 1);
+    }
+    
+    if (name.empty()) {
+        openWindow(MsgBox::create(_("Please enter a player name.")));
+        return false;
+    }
+    
+    // Update settings and save
+    settings.general.playerName = name;
+    playerNameTextBox.setText(name);  // Update with trimmed version
+    savePlayerNameToConfig();
+    return true;
+}
+
+void MultiPlayerMenu::savePlayerNameToConfig() {
+    std::string name = playerNameTextBox.getText();
+    
+    // Trim whitespace
+    size_t start = name.find_first_not_of(" \t");
+    size_t end = name.find_last_not_of(" \t");
+    if (start != std::string::npos) {
+        name = name.substr(start, end - start + 1);
+    }
+    
+    if (!name.empty() && name != settings.general.playerName) {
+        settings.general.playerName = name;
+        
+        // Save to config file
+        INIFile myINIFile(getConfigFilepath());
+        myINIFile.setStringValue("General", "Player Name", settings.general.playerName);
+        myINIFile.saveChangesTo(getConfigFilepath());
+    }
 }
 
 
@@ -143,16 +203,29 @@ void MultiPlayerMenu::onChildWindowClose(Window* pChildWindow) {
 }
 
 void MultiPlayerMenu::onCreateLANGame() {
+    if (!validateAndSavePlayerName()) {
+        return;
+    }
     CustomGameMenu(true, true).showMenu();
 }
 
 
 void MultiPlayerMenu::onCreateInternetGame() {
+    if (!validateAndSavePlayerName()) {
+        return;
+    }
     CustomGameMenu(true, false).showMenu();
 }
 
 
 void MultiPlayerMenu::onConnect() {
+    if (!validateAndSavePlayerName()) {
+        return;
+    }
+    if (!pNetworkManager) {
+        openWindow(MsgBox::create(_("Network not available. Please grant network permissions and restart the game.")));
+        return;
+    }
     std::string hostname = connectHostTextBox.getText();
     int port = atol(connectPortTextBox.getText().c_str());
 
@@ -165,7 +238,7 @@ void MultiPlayerMenu::onConnect() {
 
 
 void MultiPlayerMenu::onPeerDisconnected(const std::string& playername, bool bHost, int cause) {
-    if(bHost) {
+    if(bHost && pNetworkManager) {
         pNetworkManager->setOnReceiveGameInfo(std::function<void (const GameInitSettings&, const ChangeEventList&)>());
         pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
         closeChildWindow();
@@ -175,13 +248,50 @@ void MultiPlayerMenu::onPeerDisconnected(const std::string& playername, bool bHo
 }
 
 void MultiPlayerMenu::onJoin() {
+    if (!validateAndSavePlayerName()) {
+        return;
+    }
+    if (!pNetworkManager) {
+        openWindow(MsgBox::create(_("Network not available. Please grant network permissions and restart the game.")));
+        return;
+    }
     int selectedEntry = gameList.getSelectedIndex();
     if(selectedEntry >= 0) {
         GameServerInfo* pGameServerInfo = static_cast<GameServerInfo*>(gameList.getEntryPtrData(selectedEntry));
+        
+        // Smart NAT detection: Use local IP if available (for NAT hairpinning/same LAN)
+        // This allows players behind the same router to connect directly via LAN IP
+        ENetAddress connectAddress = pGameServerInfo->serverAddress;
+        
+        if(internetGamesButton.getToggleState() && !pGameServerInfo->localIP.empty()) {
+            // We're in Internet Games mode and server provided a local IP
+            // Check if this game is also on LAN (UDP broadcast discovery)
+            bool foundOnLAN = false;
+            for(const GameServerInfo& lanGame : LANGameList) {
+                if(lanGame.serverName == pGameServerInfo->serverName &&
+                   lanGame.serverAddress.port == pGameServerInfo->serverAddress.port &&
+                   lanGame.mapName == pGameServerInfo->mapName) {
+                    // Found via LAN broadcast - use that address (most reliable)
+                    SDL_Log("Smart NAT: Game found via LAN broadcast, using %s:%d",
+                            Address2String(lanGame.serverAddress).c_str(), lanGame.serverAddress.port);
+                    connectAddress = lanGame.serverAddress;
+                    foundOnLAN = true;
+                    break;
+                }
+            }
+            
+            if(!foundOnLAN) {
+                // Not found via LAN broadcast, but metaserver provided local IP
+                // Try local IP first (handles NAT hairpinning when on same network)
+                SDL_Log("Smart NAT: Trying local IP from metaserver: %s:%d",
+                        pGameServerInfo->localIP.c_str(), pGameServerInfo->localAddress.port);
+                connectAddress = pGameServerInfo->localAddress;
+            }
+        }
 
         pNetworkManager->setOnReceiveGameInfo(std::bind(&MultiPlayerMenu::onReceiveGameInfo, this, std::placeholders::_1, std::placeholders::_2));
         pNetworkManager->setOnPeerDisconnected(std::bind(&MultiPlayerMenu::onPeerDisconnected, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
-        pNetworkManager->connect(pGameServerInfo->serverAddress, settings.general.playerName);
+        pNetworkManager->connect(connectAddress, settings.general.playerName);
 
         openWindow(MsgBox::create(_("Connecting...")));
     }
@@ -196,6 +306,12 @@ void MultiPlayerMenu::onQuit() {
 
 
 void MultiPlayerMenu::onGameTypeChange(int buttonID) {
+    if (!pNetworkManager) {
+        // Network not available - just update button states
+        LANGamesButton.setToggleState(buttonID == 0);
+        internetGamesButton.setToggleState(buttonID == 1);
+        return;
+    }
     MetaServerClient* pMetaServerClient = pNetworkManager->getMetaServerClient();
     if((buttonID == 0) && internetGamesButton.getToggleState() == true) {
         // LAN Games
@@ -349,7 +465,9 @@ void MultiPlayerMenu::onMetaServerError(int errorcause, const std::string& error
 void MultiPlayerMenu::onReceiveGameInfo(const GameInitSettings& gameInitSettings, const ChangeEventList& changeEventList) {
     closeChildWindow();
 
-    pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
+    if (pNetworkManager) {
+        pNetworkManager->setOnPeerDisconnected(std::function<void (const std::string&, bool, int)>());
+    }
 
     auto pCustomGamePlayers = std::make_unique<CustomGamePlayers>(gameInitSettings, false);
     pCustomGamePlayers->onReceiveChangeEventList(changeEventList);
