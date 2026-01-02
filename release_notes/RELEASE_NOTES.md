@@ -1,7 +1,70 @@
-# Dune Legacy 0.99.3 Release Notes
+# Dune Legacy 0.99.5 Release Notes
 
-**Release Date:** December 12, 2025  
+**Release Date:** December 21, 2025  
 **Download:** [Windows Installer](https://dunelegacy.sourceforge.net/downloads/)
+
+---
+
+## 🚀 Version 0.99.5 Updates
+
+### 🎮 Internet Multiplayer - No Port Forwarding Required!
+
+**Play multiplayer games over the internet without any router configuration!**
+
+The game now automatically handles NAT traversal using hole punching technology. Just host or join an internet game - no need to configure port forwarding, DMZ, or UPnP on your router.
+
+**Tips for best experience:**
+- If you experience lag or stuttering, try **reducing the game speed** in Options
+- The default game speed (16) works well for most connections
+- For higher latency connections, game speed 20-24 provides smoother gameplay
+- Players on the same local network are automatically detected and use direct LAN connection
+
+**Technical Details:**
+- Automatic NAT hole punching for internet games
+- Uses STUN protocol to discover external IP:port
+- Coordinated UDP hole punching via metaserver
+- Falls back to direct connect if hole punch fails
+- Works with most symmetric NAT routers
+- Custom STUN client implementation (no external library)
+- Non-blocking punch state machine (no UI freezing)
+
+### Multiplayer Stability
+
+**Connection Improvements:**
+- Added NAT keep-alive packets to prevent router timeout
+- Fixed host disconnect detection (game now ends properly)
+- Smart NAT: Detects when players are on same network and uses local IP (avoids hairpin NAT lag)
+- Smoother gameplay during network stalls (capped catch-up to 3 cycles/frame)
+
+---
+
+## 🚀 Version 0.99.4 Updates
+
+### Discord Integration
+
+**Discord Game Notifications:**
+- Game Starting notifications posted to Discord channel when multiplayer game begins
+- Shows map name, mod, and all player/house assignments
+- Notifications sent via metaserver (no client-side webhook configuration needed)
+
+**Enhanced Rich Presence:**
+- Shows lobby status when hosting/joining multiplayer games
+- Displays in-game activity with house, map, and player count
+- Updates dynamically as players join/leave lobby
+- Proper party size display (current players / max slots)
+- DiscordManager::update() now called regularly for reliable presence updates
+
+### Multiplayer Mod Sync Fixes
+
+**Vanilla Mod Sync:**
+- Fixed issue where clients couldn't sync when host uses vanilla mod
+- Clients now switch to local vanilla first before attempting download
+- Vanilla mod checksum now based on file contents, not runtime settings
+- Clear error message if vanilla versions don't match
+
+**General Improvements:**
+- Mod sync tries local mod switch before downloading
+- Better error handling for mod mismatch scenarios
 
 ---
 

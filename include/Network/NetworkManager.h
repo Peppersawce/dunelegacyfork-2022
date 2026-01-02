@@ -33,6 +33,7 @@
 #include <enet/enet.h>
 #include <string>
 #include <list>
+#include <vector>
 #include <functional>
 #include <stdarg.h>
 
@@ -60,6 +61,7 @@
 #define NETWORKPACKET_MOD_CHUNK             16  // Host -> Client: mod file chunk
 #define NETWORKPACKET_MOD_COMPLETE          17  // Host -> Client: transfer complete
 #define NETWORKPACKET_MOD_ACK               18  // Client -> Host: acknowledge mod sync complete
+#define NETWORKPACKET_KEEPALIVE             19  // Periodic ping to keep NAT mappings alive
 
 // Network protocol version - increment when packet formats change
 // Version 2: Added simMsAvg to NETWORKPACKET_CLIENTSTATS (5 fields instead of 4)
@@ -81,6 +83,7 @@ public:
     ~NetworkManager();
 
     bool isServer() const { return bIsServer; };
+    bool isLANServer() const { return bLANServer; };
 
     void startServer(bool bLANServer, const std::string& serverName, const std::string& playerName, GameInitSettings* pGameInitSettings, int numPlayers, int maxPlayers);
     void updateServer(int numPlayers);
@@ -348,6 +351,7 @@ private:
     ENetHost* host = nullptr;
     bool bIsServer = false;
     bool bLANServer = false;
+    bool bGameInProgress = false;  // Set true when game starts - disables lobby-only features
     GameInitSettings* pGameInitSettings = nullptr;
     int numPlayers = 0;
     int maxPlayers = 0;
@@ -394,6 +398,26 @@ private:
     Uint32                                      upnpLeaseStartTime = 0;
     static constexpr int                        UPNP_LEASE_DURATION = 3600;      // 1 hour lease
     static constexpr int                        UPNP_RENEWAL_MARGIN = 300;       // Renew 5 min before expiry
+    
+    // NAT keep-alive: send reliable ping every 10 seconds to prevent NAT timeout
+    Uint32                                      lastKeepAliveTime = 0;
+    static constexpr int                        KEEPALIVE_INTERVAL_MS = 10000;   // 10 seconds
+    
+    // NAT Hole Punch: Non-blocking state machine for host-side punching
+    struct PendingPunch {
+        std::string clientId;
+        std::string clientIP;
+        uint16_t clientPort = 0;
+        Uint32 punchAtTime = 0;       // SDL_GetTicks() when to start punching
+        int packetsRemaining = 0;     // Packets left to send
+        Uint32 lastPacketTime = 0;    // For pacing packets
+    };
+    std::vector<PendingPunch>                   pendingPunches;
+    Uint32                                      lastPunchPollTime = 0;
+    static constexpr int                        PUNCH_POLL_INTERVAL_MS = 1000;   // Poll every 1s
+    static constexpr int                        PUNCH_DELAY_MS = 2000;           // Delay before punching
+    static constexpr int                        PUNCH_PACKET_COUNT = 10;         // Packets per punch
+    static constexpr int                        PUNCH_PACKET_INTERVAL_MS = 50;   // Interval between packets
 
 public:
     /**
@@ -403,6 +427,36 @@ public:
     bool isUPnPPortMapped() const { return upnpPortMapped; }
     std::string getUPnPStatus() const { return pUPnPManager ? pUPnPManager->getStatusString() : "Not initialized"; }
     std::string getExternalIPAddress() const { return pUPnPManager ? pUPnPManager->getExternalIPAddress() : ""; }
+    
+    /**
+     * NAT Hole Punch: Send UDP punch packets to an address to create NAT mappings.
+     * @param targetIP   Target IP address
+     * @param targetPort Target port
+     * @param count      Number of packets to send (default: 5)
+     * @param intervalMs Interval between packets in ms (default: 50)
+     */
+    void sendHolePunchPackets(const std::string& targetIP, uint16_t targetPort, int count = 5, int intervalMs = 50);
+    
+    /**
+     * Perform STUN query to discover external IP:port.
+     * SAFETY: Only call when no ENet peers exist (peerList empty).
+     * @return External port if successful, 0 on failure
+     */
+    uint16_t performStunQuery();
+    
+    /**
+     * Perform STUN query and return both external IP and port.
+     * SAFETY: Only call when no ENet peers exist (peerList empty).
+     * @param outIP  Will be set to the external IP if successful
+     * @param outPort Will be set to the external port if successful
+     * @return true if successful, false on failure
+     */
+    bool performStunQueryFull(std::string& outIP, uint16_t& outPort);
+    
+    /**
+     * Get the ENet host (for STUN queries)
+     */
+    ENetHost* getHost() const { return host; }
 };
 
 #endif // NETWORKMANAGER_H

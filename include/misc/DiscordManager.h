@@ -20,6 +20,7 @@
 
 #include <string>
 #include <cstdint>
+#include <thread>
 
 /**
  * Discord Rich Presence Manager
@@ -52,7 +53,13 @@ public:
     void setInLobby(const std::string& hostName, const std::string& mapName);
     
     // Set presence for multiplayer game in progress
-    void setMultiplayerGame(const std::string& houseName, const std::string& mapName, int playerCount);
+    void setMultiplayerGame(const std::string& houseName, const std::string& mapName, 
+                            int currentPlayers, int maxPlayers);
+    
+    // Set presence for game starting (countdown) with player details
+    // playerDetails format: "Atreides: Player1, Harkonnen: QuantBot, ..."
+    void setGameStarting(const std::string& mapName, const std::string& modName, 
+                         const std::string& playerDetails, int playerCount);
     
     // Set presence for map editor
     void setMapEditor(const std::string& mapName = "");
@@ -62,6 +69,17 @@ public:
     
     // Check if Discord is connected
     bool isConnected() const { return connected; }
+    
+    // Set webhook URL for posting game notifications to a Discord channel
+    void setWebhookUrl(const std::string& url) { webhookUrl = url; }
+    
+    // Send a webhook message to the configured Discord channel (async, non-blocking)
+    void sendWebhookMessage(const std::string& title, const std::string& description, 
+                            int color = 0x3498db);  // Default: blue color
+    
+    // Send game starting notification to Discord channel
+    void sendGameStartingNotification(const std::string& mapName, const std::string& modName,
+                                      const std::string& playerDetails);
 
 private:
     DiscordManager() = default;
@@ -74,6 +92,7 @@ private:
     bool initialized = false;
     bool connected = false;
     int64_t startTimestamp = 0;
+    std::string webhookUrl;
     
     void updatePresence(const std::string& state, const std::string& details,
                         const std::string& largeImageKey = "logo",

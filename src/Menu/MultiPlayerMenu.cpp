@@ -259,14 +259,16 @@ void MultiPlayerMenu::onJoin() {
     if(selectedEntry >= 0) {
         GameServerInfo* pGameServerInfo = static_cast<GameServerInfo*>(gameList.getEntryPtrData(selectedEntry));
         
-        // Smart NAT detection: Use local IP if available (for NAT hairpinning/same LAN)
-        // This allows players behind the same router to connect directly via LAN IP
+        // Smart NAT detection: For internet games, decide whether to use external or local IP
+        // - If found via LAN broadcast, use LAN address (same network confirmed)
+        // - Otherwise, use external IP from metaserver (the default for internet games)
+        // Note: The local IP is only useful if both players are behind the same router,
+        // which would be detected via LAN broadcast anyway.
         ENetAddress connectAddress = pGameServerInfo->serverAddress;
+        bool foundOnLAN = false;
         
-        if(internetGamesButton.getToggleState() && !pGameServerInfo->localIP.empty()) {
-            // We're in Internet Games mode and server provided a local IP
+        if(internetGamesButton.getToggleState()) {
             // Check if this game is also on LAN (UDP broadcast discovery)
-            bool foundOnLAN = false;
             for(const GameServerInfo& lanGame : LANGameList) {
                 if(lanGame.serverName == pGameServerInfo->serverName &&
                    lanGame.serverAddress.port == pGameServerInfo->serverAddress.port &&
@@ -281,11 +283,98 @@ void MultiPlayerMenu::onJoin() {
             }
             
             if(!foundOnLAN) {
-                // Not found via LAN broadcast, but metaserver provided local IP
-                // Try local IP first (handles NAT hairpinning when on same network)
-                SDL_Log("Smart NAT: Trying local IP from metaserver: %s:%d",
-                        pGameServerInfo->localIP.c_str(), pGameServerInfo->localAddress.port);
-                connectAddress = pGameServerInfo->localAddress;
+                // Not found on LAN - check if we're behind the same NAT (same external IP)
+                // If so, use local IP to avoid hairpin NAT issues
+                std::string clientExternalIP;
+                uint16_t clientStunPort = 0;
+                bool sameNAT = false;
+                
+                if (pNetworkManager->performStunQueryFull(clientExternalIP, clientStunPort)) {
+                    // Get server's external IP from the address
+                    std::string serverExternalIP = Address2String(pGameServerInfo->serverAddress);
+                    
+                    if (clientExternalIP == serverExternalIP && !pGameServerInfo->localIP.empty()) {
+                        // Same external IP = behind same NAT, use local IP
+                        SDL_Log("Same-NAT detected: client=%s, server=%s - using local IP %s",
+                                clientExternalIP.c_str(), serverExternalIP.c_str(), 
+                                pGameServerInfo->localIP.c_str());
+                        
+                        if (enet_address_set_host(&connectAddress, pGameServerInfo->localIP.c_str()) == 0) {
+                            // Keep the same port (local port = external port for most routers)
+                            sameNAT = true;
+                        } else {
+                            SDL_Log("Same-NAT: Failed to resolve local IP %s, falling back",
+                                    pGameServerInfo->localIP.c_str());
+                        }
+                    }
+                }
+                
+                // If not same-NAT, try hole punch if available
+                if (!sameNAT && pGameServerInfo->holePunchAvailable && !pGameServerInfo->sessionId.empty()) {
+                    SDL_Log("NAT Hole Punch: Attempting hole punch for internet game");
+                    if (clientStunPort > 0) {
+                        MetaServerClient* pMetaServer = pNetworkManager->getMetaServerClient();
+                        if (pMetaServer) {
+                            // Step 2: Request hole punch coordination
+                            std::string clientId = pMetaServer->requestHolePunch(
+                                pGameServerInfo->sessionId, clientStunPort);
+                            
+                            if (!clientId.empty()) {
+                                // Step 3: Poll for punch readiness (with timeout)
+                                openWindow(MsgBox::create(_("Establishing NAT connection...")));
+                                
+                                std::string hostIP;
+                                uint16_t hostPort = 0;
+                                int waitSeconds = 0;
+                                bool punchReady = false;
+                                
+                                Uint32 pollStart = SDL_GetTicks();
+                                constexpr Uint32 PUNCH_TIMEOUT_MS = 10000;  // 10 second timeout
+                                
+                                while (SDL_GetTicks() - pollStart < PUNCH_TIMEOUT_MS) {
+                                    if (pMetaServer->pollPunchStatus(pGameServerInfo->sessionId, clientId,
+                                                                     hostIP, hostPort, waitSeconds)) {
+                                        punchReady = true;
+                                        break;
+                                    }
+                                    SDL_Delay(500);  // Poll every 500ms
+                                }
+                                
+                                closeChildWindow();
+                                
+                                if (punchReady) {
+                                    SDL_Log("NAT Hole Punch: Ready - host at %s:%d, waiting %d sec",
+                                            hostIP.c_str(), hostPort, waitSeconds);
+                                    
+                                    // Step 4: Wait coordinated time
+                                    if (waitSeconds > 0) {
+                                        SDL_Delay(waitSeconds * 1000);
+                                    }
+                                    
+                                    // Step 5: Send punch packets
+                                    pNetworkManager->sendHolePunchPackets(hostIP, hostPort, 10, 50);
+                                    
+                                    // Step 6: Update connect address to punched address
+                                    if (enet_address_set_host(&connectAddress, hostIP.c_str()) == 0) {
+                                        connectAddress.port = hostPort;
+                                        SDL_Log("NAT Hole Punch: Connecting to punched address %s:%d",
+                                                hostIP.c_str(), hostPort);
+                                    }
+                                } else {
+                                    SDL_Log("NAT Hole Punch: Timeout - falling back to direct connect");
+                                }
+                            } else {
+                                SDL_Log("NAT Hole Punch: Failed to get client ID - falling back to direct connect");
+                            }
+                        }
+                    } else {
+                        SDL_Log("NAT Hole Punch: STUN query failed - falling back to direct connect");
+                    }
+                } else {
+                    // No hole punch available - use direct connection
+                    SDL_Log("Connecting to internet game via external IP: %s:%d",
+                            Address2String(pGameServerInfo->serverAddress).c_str(), pGameServerInfo->serverAddress.port);
+                }
             }
         }
 

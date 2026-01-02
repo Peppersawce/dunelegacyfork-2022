@@ -46,6 +46,7 @@ std::mutex Game::performanceLogMutex;
 #include <misc/exceptions.h>
 #include <misc/format.h>
 #include <misc/SDL2pp.h>
+#include <misc/DiscordManager.h>
 
 #include <players/HumanPlayer.h>
 
@@ -748,7 +749,18 @@ void Game::checkBudgetAdjustment() {
         // This ensures the host has fresh data when it makes its decision
         if((gameCycleCount + 1) % kBudgetCheckInterval == 0 && frameTiming.frameCount > 0) {
             const double avgFps = (frameTiming.frameCount * 1000.0 / frameTiming.totalMs);
-            sendStatsToHost(avgFps, frameTiming.simMsAvg, pathRequestQueue.size(), negotiatedBudget);
+            
+            // Send the budget we'll have at decision time (next cycle), not current budget
+            // This avoids false DESYNC detection when a budget change is pending
+            size_t budgetAtDecisionTime = negotiatedBudget;
+            for (const auto& pending : pendingBudgetChanges) {
+                if (pending.applyCycle == gameCycleCount + 1) {
+                    budgetAtDecisionTime = pending.newBudget;
+                    break;  // Use the first pending change for next cycle
+                }
+            }
+            
+            sendStatsToHost(avgFps, frameTiming.simMsAvg, pathRequestQueue.size(), budgetAtDecisionTime);
         }
     }
     else if(gameCycleCount % kBudgetCheckInterval == 0 && frameTiming.frameCount > 0) {
@@ -1012,11 +1024,26 @@ void Game::makeHostBudgetDecision() {
     bool allClientsSynced = true;
     
     for(const auto& [clientId, stats] : clientStats) {
-        // Validate budget synchronization (sanity check)
-        if(stats.currentBudget != negotiatedBudget) {
+        // Validate budget synchronization using cycle-based comparison
+        // See: .analysis/features/pathbudget-sync/design.md for protocol contract
+        
+        bool budgetMatches = (stats.currentBudget == negotiatedBudget);
+        
+        // Defense-in-depth: Allow previous budget ONLY if client's report is from BEFORE the change
+        // This is a tight cycle-based check, not an arbitrary time window
+        bool clientReportFromBeforeChange = (stats.lastUpdateCycle < lastBudgetChangeCycle);
+        bool matchesPrevious = (stats.currentBudget == previousNegotiatedBudget);
+        
+        // Budget is valid if:
+        // 1. It matches current budget (normal case), OR
+        // 2. Client's report is from before the last change AND matches previous budget
+        bool budgetValid = budgetMatches || (clientReportFromBeforeChange && matchesPrevious);
+        
+        if(!budgetValid) {
             SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
-                "[PathBudget] DESYNC DETECTED! Client %d budget=%d but host=%zu - triggering re-sync",
-                clientId, stats.currentBudget, negotiatedBudget);
+                "[PathBudget] DESYNC DETECTED! Client %d budget=%d but host=%zu (prev=%zu, clientCycle=%d, changeCycle=%d)",
+                clientId, stats.currentBudget, negotiatedBudget, previousNegotiatedBudget,
+                stats.lastUpdateCycle, lastBudgetChangeCycle);
             logPerformance("[DESYNC CRITICAL] Client %d has budget=%d but host has %zu - re-syncing immediately",
                     clientId, stats.currentBudget, negotiatedBudget);
             
@@ -1221,6 +1248,12 @@ void Game::applyPendingBudgetChanges() {
         if(gameCycleCount >= it->applyCycle) {
             // Apply budget change NOW
             size_t oldBudget = negotiatedBudget;
+            
+            // Track previous budget for DESYNC defense-in-depth:
+            // allow the previous budget only when the client report cycle is before this change cycle.
+            previousNegotiatedBudget = oldBudget;
+            lastBudgetChangeCycle = gameCycleCount;
+            
             negotiatedBudget = std::clamp(it->newBudget, kMinBudget, kMaxBudget);
             
             // CRITICAL FOR SYNC: Reset carry-over tokens on budget change
@@ -1935,6 +1968,39 @@ void Game::setupView()
 void Game::runMainLoop() {
     SDL_Log("Starting game...");
     initializeGameLoop();
+    
+    // Update Discord Rich Presence for in-game status
+    std::string houseName = pLocalHouse ? getHouseNameByNumber(static_cast<HOUSETYPE>(pLocalHouse->getHouseID())) : "Unknown";
+    std::string mapName = gameInitSettings.getFilename();
+    // Extract just the map name from the path
+    size_t lastSlash = mapName.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        mapName = mapName.substr(lastSlash + 1);
+    }
+    size_t lastDot = mapName.find_last_of('.');
+    if (lastDot != std::string::npos) {
+        mapName = mapName.substr(0, lastDot);
+    }
+    
+    if (gameInitSettings.getGameType() == GameType::CustomMultiplayer || 
+        gameInitSettings.getGameType() == GameType::LoadMultiplayer) {
+        // Count human players from game init settings (not alive houses which can change during game)
+        int humanPlayerCount = 0;
+        int totalPlayerSlots = 0;
+        for (const auto& houseInfo : gameInitSettings.getHouseInfoList()) {
+            for (const auto& playerInfo : houseInfo.playerInfoList) {
+                totalPlayerSlots++;
+                if (playerInfo.playerClass == HUMANPLAYERCLASS) {
+                    humanPlayerCount++;
+                }
+            }
+        }
+        // Use human count for current players, total slots for max party size
+        DiscordManager::instance().setMultiplayerGame(houseName, mapName, humanPlayerCount, totalPlayerSlots);
+    } else {
+        bool isCampaign = (gameInitSettings.getGameType() == GameType::Campaign);
+        DiscordManager::instance().setInGame(houseName, mapName, isCampaign);
+    }
 
     int frameStart = SDL_GetTicks();
     int frameTime = 0;
@@ -1963,11 +2029,28 @@ void Game::runMainLoop() {
         // MULTIPLAYER FIX (Issue #1): Removed time-based pathfinding budget
         // Token budget is now the only gate (deterministic)
         
+        // Update Discord Rich Presence callbacks (once per second to avoid overhead)
+        static Uint32 lastDiscordUpdate = 0;
+        Uint32 discordNow = SDL_GetTicks();
+        if (discordNow - lastDiscordUpdate >= 1000) {
+            DiscordManager::instance().update();
+            lastDiscordUpdate = discordNow;
+        }
+        
         renderFrame();
 
         const int frameEnd = SDL_GetTicks();
         const int actualFrameTime = frameEnd - frameStart;  // Actual time for this frame
         frameTime += actualFrameTime;
+        
+        // CAP frameTime to prevent excessive catch-up bursts during network stalls
+        // Allow up to 3 cycles worth of catch-up per frame for smoother gameplay
+        // This trades off "real-time accuracy" for "smooth gameplay feel"
+        const int maxFrameTime = getGameSpeed() * 3;
+        if (frameTime > maxFrameTime) {
+            frameTime = maxFrameTime;
+        }
+        
         frameStart = frameEnd;  // Reset for next frame's game logic timing
 
         if(bShowFPS) {
@@ -2052,6 +2135,9 @@ void Game::runMainLoop() {
                     frameTiming.networkWaitMs += networkWaitMs;
                     frameTiming.networkWaitMsThisFrame += networkWaitMs;
                     if(networkWaitMs > frameTiming.maxNetworkWaitMs) frameTiming.maxNetworkWaitMs = networkWaitMs;
+                    
+                    // Don't reset frameTime - let the game catch up naturally.
+                    // The guardrail (10 cycles/frame max) prevents excessive catch-up.
                 }
                 else if (bPause){
                     // Pause in single player shouldn't jump after resuming
@@ -2372,7 +2458,17 @@ void Game::initializeNetwork() {
             std::bind(&Game::handleSetPathBudget, this,
             std::placeholders::_1, std::placeholders::_2));
         
-        cmdManager.setNetworkCycleBuffer(MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5);
+        // Network buffer: RTT-based + 5 cycles padding
+        // LAN games: Use RTT-based (typically 5 cycles = 100ms)
+        // Internet games: Use minimum of 10 cycles (200ms) to handle jitter
+        const int rttBuffer = MILLI2CYCLES(pNetworkManager->getMaxPeerRoundTripTime()) + 5;
+        const int minInternetBuffer = 10;  // 200ms minimum for internet
+        const bool isLAN = pNetworkManager->isLANServer();
+        const int networkBuffer = isLAN ? rttBuffer : std::max(rttBuffer, minInternetBuffer);
+        cmdManager.setNetworkCycleBuffer(networkBuffer);
+        SDL_Log("Network buffer set to %d cycles (RTT: %dms, %s)", 
+                networkBuffer, pNetworkManager->getMaxPeerRoundTripTime(),
+                isLAN ? "LAN" : "Internet");
     }
 }
 
@@ -3163,6 +3259,16 @@ void Game::onReceiveSelectionList(const std::string& name, const std::set<Uint32
 
 void Game::onPeerDisconnected(const std::string& name, bool bHost, int cause) {
     pInterface->getChatManager().addInfoMessage(name + " disconnected!");
+    
+    // If host disconnected, the game cannot continue - end it
+    if(bHost) {
+        SDL_Log("Host '%s' disconnected - ending game", name.c_str());
+        pInterface->getChatManager().addInfoMessage("Host disconnected! Game ending...");
+        
+        // Set game as lost/quit so we return to menu
+        bQuitGame = true;
+        return;
+    }
     
     // CRITICAL: Clear all client stats when ANY peer disconnects
     // Active clients will re-register at the next interval (< 375 cycles)

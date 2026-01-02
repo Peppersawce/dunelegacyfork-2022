@@ -20,6 +20,7 @@
 #include <config.h>
 
 #include <Network/ENetHelper.h>
+#include <Network/StunClient.h>
 
 #include <GameInitSettings.h>
 
@@ -93,6 +94,9 @@ NetworkManager::~NetworkManager() {
 }
 
 void NetworkManager::startServer(bool bLANServer, const std::string& serverName, const std::string& playerName, GameInitSettings* pGameInitSettings, int numPlayers, int maxPlayers) {
+    // Reset game-in-progress flag for new game
+    bGameInProgress = false;
+    
     if(bLANServer == true) {
         if(pLANGameFinderAndAnnouncer != nullptr) {
             pLANGameFinderAndAnnouncer->startAnnounce(serverName, host->address.port, pGameInitSettings->getFilename(), numPlayers, maxPlayers);
@@ -129,8 +133,25 @@ void NetworkManager::startServer(bool bLANServer, const std::string& serverName,
         if(pMetaServerClient != nullptr) {
             // Get active mod info
             ModInfo activeModInfo = ModManager::instance().getModInfo(ModManager::instance().getActiveModName());
+            
+            // NAT traversal: Perform STUN query to discover external IP:port
+            // SAFETY: STUN only runs here because peerList is empty (pre-connection)
+            uint16_t stunPort = 0;
+            if (host != nullptr && host->socket != ENET_SOCKET_NULL && peerList.empty()) {
+                SDL_Log("NetworkManager: Performing STUN query for NAT traversal...");
+                StunClient::StunResult stunResult = StunClient::performStunQuery(host->socket);
+                if (stunResult.success) {
+                    stunPort = stunResult.externalPort;
+                    SDL_Log("NetworkManager: STUN discovered external address %s:%d", 
+                            stunResult.externalIP.c_str(), stunResult.externalPort);
+                } else {
+                    SDL_Log("NetworkManager: STUN query failed: %s (will announce without STUN port)", 
+                            stunResult.errorMessage.c_str());
+                }
+            }
+            
             pMetaServerClient->startAnnounce(serverName, host->address.port, pGameInitSettings->getFilename(), numPlayers, maxPlayers,
-                                             activeModInfo.name, activeModInfo.version);
+                                             activeModInfo.name, activeModInfo.version, stunPort);
         }
     }
 
@@ -169,6 +190,11 @@ void NetworkManager::stopAnnouncing() {
         }
     }
     // NOTE: bIsServer remains TRUE so the host can continue managing the game
+    
+    // Mark game as in progress - this disables lobby-only features like NAT hole punch polling
+    // (which uses blocking HTTP calls that would cause major stutter during gameplay)
+    bGameInProgress = true;
+    SDL_Log("NetworkManager: Game in progress - lobby features disabled");
 }
 
 void NetworkManager::stopServer() {
@@ -190,7 +216,92 @@ void NetworkManager::stopServer() {
     // Fully stop the server (called when leaving a game or menu)
     bIsServer = false;
     bLANServer = false;
+    // NOTE: Do NOT reset bGameInProgress here - it should remain true while game is active
+    // It will be reset when NetworkManager is destroyed or when a new server is started
     pGameInitSettings = nullptr;
+}
+
+void NetworkManager::sendHolePunchPackets(const std::string& targetIP, uint16_t targetPort, int count, int intervalMs) {
+    if (host == nullptr || host->socket == ENET_SOCKET_NULL) {
+        SDL_Log("NetworkManager::sendHolePunchPackets - No socket available");
+        return;
+    }
+    
+    // Resolve target address
+    ENetAddress targetAddress;
+    if (enet_address_set_host(&targetAddress, targetIP.c_str()) < 0) {
+        SDL_Log("NetworkManager::sendHolePunchPackets - Failed to resolve %s", targetIP.c_str());
+        return;
+    }
+    targetAddress.port = targetPort;
+    
+    // Send punch packets - "DLHP" (Dune Legacy Hole Punch) signature
+    const uint8_t punchData[] = {'D', 'L', 'H', 'P'};
+    
+    SDL_Log("NetworkManager: Sending %d hole punch packets to %s:%d", count, targetIP.c_str(), targetPort);
+    
+    for (int i = 0; i < count; i++) {
+        ENetBuffer sendBuffer;
+        sendBuffer.data = const_cast<uint8_t*>(punchData);
+        sendBuffer.dataLength = sizeof(punchData);
+        
+        int sent = enet_socket_send(host->socket, &targetAddress, &sendBuffer, 1);
+        if (sent < 0) {
+            SDL_Log("NetworkManager::sendHolePunchPackets - Send failed on packet %d", i + 1);
+        }
+        
+        if (i < count - 1 && intervalMs > 0) {
+            SDL_Delay(intervalMs);
+        }
+    }
+    
+    SDL_Log("NetworkManager: Hole punch packets sent");
+}
+
+uint16_t NetworkManager::performStunQuery() {
+    if (host == nullptr || host->socket == ENET_SOCKET_NULL) {
+        SDL_Log("NetworkManager::performStunQuery - No socket available");
+        return 0;
+    }
+    
+    if (!peerList.empty()) {
+        SDL_Log("NetworkManager::performStunQuery - Cannot run with active peers");
+        return 0;
+    }
+    
+    StunClient::StunResult result = StunClient::performStunQuery(host->socket);
+    if (result.success) {
+        SDL_Log("NetworkManager::performStunQuery - External: %s:%d", 
+                result.externalIP.c_str(), result.externalPort);
+        return result.externalPort;
+    } else {
+        SDL_Log("NetworkManager::performStunQuery - Failed: %s", result.errorMessage.c_str());
+        return 0;
+    }
+}
+
+bool NetworkManager::performStunQueryFull(std::string& outIP, uint16_t& outPort) {
+    if (host == nullptr || host->socket == ENET_SOCKET_NULL) {
+        SDL_Log("NetworkManager::performStunQueryFull - No socket available");
+        return false;
+    }
+    
+    if (!peerList.empty()) {
+        SDL_Log("NetworkManager::performStunQueryFull - Cannot run with active peers");
+        return false;
+    }
+    
+    StunClient::StunResult result = StunClient::performStunQuery(host->socket);
+    if (result.success) {
+        outIP = result.externalIP;
+        outPort = result.externalPort;
+        SDL_Log("NetworkManager::performStunQueryFull - External: %s:%d", 
+                outIP.c_str(), outPort);
+        return true;
+    } else {
+        SDL_Log("NetworkManager::performStunQueryFull - Failed: %s", result.errorMessage.c_str());
+        return false;
+    }
 }
 
 void NetworkManager::connect(const std::string& hostname, int port, const std::string& playerName) {
@@ -247,6 +358,107 @@ void NetworkManager::update()
                 SDL_Log("NetworkManager: UPnP lease renewed successfully");
             } else {
                 SDL_Log("NetworkManager: Warning - UPnP lease renewal failed");
+            }
+        }
+    }
+    
+    // NAT Hole Punch: Non-blocking state machine for host-side punching
+    // Only when hosting an internet game (not LAN) and NOT in an active game
+    // CRITICAL: This uses blocking HTTP calls - MUST NOT run during gameplay!
+    if (bIsServer && !bLANServer && !bGameInProgress && pMetaServerClient != nullptr) {
+        Uint32 now = SDL_GetTicks();
+        
+        // Step 1: Poll for new punch requests (every 1 second)
+        if (now - lastPunchPollTime >= PUNCH_POLL_INTERVAL_MS) {
+            lastPunchPollTime = now;
+            
+            std::vector<std::tuple<std::string, std::string, uint16_t>> punchRequests;
+            if (pMetaServerClient->pollPunchRequests(punchRequests) && !punchRequests.empty()) {
+                for (const auto& request : punchRequests) {
+                    std::string clientId = std::get<0>(request);
+                    std::string clientIP = std::get<1>(request);
+                    uint16_t clientPort = std::get<2>(request);
+                    
+                    SDL_Log("NAT Hole Punch: Received punch request from %s:%d (id: %s)",
+                            clientIP.c_str(), clientPort, clientId.c_str());
+                    
+                    // Signal ready to punch (non-blocking - just HTTP GET)
+                    if (pMetaServerClient->signalPunchReady(clientId)) {
+                        // Schedule punch for PUNCH_DELAY_MS from now (no blocking!)
+                        PendingPunch pending;
+                        pending.clientId = clientId;
+                        pending.clientIP = clientIP;
+                        pending.clientPort = clientPort;
+                        pending.punchAtTime = now + PUNCH_DELAY_MS;
+                        pending.packetsRemaining = PUNCH_PACKET_COUNT;
+                        pending.lastPacketTime = 0;
+                        pendingPunches.push_back(pending);
+                        
+                        SDL_Log("NAT Hole Punch: Scheduled punch to %s:%d in %dms",
+                                clientIP.c_str(), clientPort, PUNCH_DELAY_MS);
+                    }
+                }
+            }
+        }
+        
+        // Step 2: Process pending punches (send 1 packet per interval, no blocking)
+        for (auto it = pendingPunches.begin(); it != pendingPunches.end(); ) {
+            PendingPunch& pending = *it;
+            
+            // Check if it's time to start/continue punching
+            if (now >= pending.punchAtTime && pending.packetsRemaining > 0) {
+                // Check if enough time passed since last packet
+                if (now - pending.lastPacketTime >= PUNCH_PACKET_INTERVAL_MS) {
+                    // Send one punch packet
+                    if (host != nullptr && host->socket != ENET_SOCKET_NULL) {
+                        ENetAddress targetAddress;
+                        if (enet_address_set_host(&targetAddress, pending.clientIP.c_str()) == 0) {
+                            targetAddress.port = pending.clientPort;
+                            
+                            const uint8_t punchData[] = {'D', 'L', 'H', 'P'};
+                            ENetBuffer sendBuffer;
+                            sendBuffer.data = const_cast<uint8_t*>(punchData);
+                            sendBuffer.dataLength = sizeof(punchData);
+                            
+                            enet_socket_send(host->socket, &targetAddress, &sendBuffer, 1);
+                        }
+                    }
+                    
+                    pending.packetsRemaining--;
+                    pending.lastPacketTime = now;
+                    
+                    if (pending.packetsRemaining == 0) {
+                        SDL_Log("NAT Hole Punch: Completed punch to %s:%d",
+                                pending.clientIP.c_str(), pending.clientPort);
+                    }
+                }
+            }
+            
+            // Remove completed punches
+            if (pending.packetsRemaining <= 0) {
+                it = pendingPunches.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+    
+    // NAT keep-alive: Send periodic reliable ping to prevent NAT mapping timeout
+    // Many routers drop UDP NAT mappings after 30-60 seconds of "inactivity"
+    // (unreliable packets don't count as activity since they have no ACKs)
+    if (!peerList.empty() || connectPeer != nullptr) {
+        Uint32 now = SDL_GetTicks();
+        if (now - lastKeepAliveTime >= KEEPALIVE_INTERVAL_MS) {
+            lastKeepAliveTime = now;
+            
+            ENetPacketOStream packetStream(ENET_PACKET_FLAG_RELIABLE);
+            packetStream.writeUint32(NETWORKPACKET_KEEPALIVE);
+            packetStream.writeUint32(now);  // Timestamp for debugging
+            
+            if (bIsServer) {
+                sendPacketToAllConnectedPeers(packetStream);
+            } else if (connectPeer != nullptr) {
+                sendPacketToHost(packetStream);
             }
         }
     }
@@ -1138,6 +1350,12 @@ void NetworkManager::handlePacket(ENetPeer* peer, ENetPacketIStream& packetStrea
                     pOnReceiveModAck(playerName, success, modChecksum);
                 }
             } break;
+            
+            case NETWORKPACKET_KEEPALIVE: {
+                // NAT keep-alive ping - just receiving it is enough to keep the NAT mapping alive
+                // The reliable packet triggers ACKs which count as bidirectional traffic
+                // No action needed, packet is silently consumed
+            } break;
 
             default: {
                 SDL_Log("NetworkManager: Unknown packet type %d", packetType);
@@ -1155,7 +1373,8 @@ void NetworkManager::handlePacket(ENetPeer* peer, ENetPacketIStream& packetStrea
 
 void NetworkManager::sendPacketToHost(ENetPacketOStream& packetStream, int channel) {
     if(connectPeer == nullptr) {
-        SDL_Log("NetworkManager: sendPacketToHost() called on server!");
+        // This can happen if host disconnected but game hasn't processed the quit yet
+        SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "NetworkManager: sendPacketToHost() failed - no host connection");
         return;
     }
 

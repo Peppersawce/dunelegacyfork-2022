@@ -28,6 +28,8 @@
 #include <enet/enet.h>
 #include <string>
 #include <list>
+#include <vector>
+#include <tuple>
 
 #define SERVERLIST_UPDATE_INTERVAL  (8*1000)
 #define GAMESERVER_UPDATE_INTERVAL  (10*1000)
@@ -57,11 +59,62 @@ public:
     }
 
     void startAnnounce(const std::string& serverName, int serverPort, const std::string& mapName, Uint8 numPlayers, Uint8 maxPlayers,
-                       const std::string& modName = "vanilla", const std::string& modVersion = "");
+                       const std::string& modName = "vanilla", const std::string& modVersion = "",
+                       uint16_t stunPort = 0);
+    
+    /**
+        Get the session ID assigned by the metaserver (for hole punch coordination)
+        \return session ID or empty string if not available
+    */
+    const std::string& getSessionId() const { return sessionId; }
 
     void updateAnnounce(Uint8 numPlayers);
 
     void stopAnnounce();
+    
+    /**
+        Announce that a game is starting (sends Discord notification via metaserver)
+        \param  mapName     The name of the map
+        \param  modName     The name of the mod
+        \param  players     Player details in format "House1:Player1,House2:Player2,..."
+    */
+    void announceGameStart(const std::string& mapName, const std::string& modName, const std::string& players);
+    
+    // NAT Traversal / Hole Punch methods (synchronous - for use in connection flow)
+    
+    /**
+        Request hole punch coordination from metaserver (client side)
+        \param  sessionId   The session ID of the game to join
+        \param  stunPort    The client's STUN-discovered external port
+        \return Client ID if successful, empty string on failure
+    */
+    std::string requestHolePunch(const std::string& sessionId, uint16_t stunPort);
+    
+    /**
+        Poll for punch readiness (client side)
+        \param  sessionId   The session ID of the game
+        \param  clientId    The client ID from requestHolePunch
+        \param  hostIP      Output: host's external IP
+        \param  hostPort    Output: host's external port
+        \param  waitSeconds Output: seconds to wait before punching
+        \return true if ready, false if still waiting or error
+    */
+    bool pollPunchStatus(const std::string& sessionId, const std::string& clientId,
+                         std::string& hostIP, uint16_t& hostPort, int& waitSeconds);
+    
+    /**
+        Poll for pending punch requests (host side)
+        \param  requests    Output: list of (clientId, clientIP, clientPort) tuples
+        \return true on success, false on error
+    */
+    bool pollPunchRequests(std::vector<std::tuple<std::string, std::string, uint16_t>>& requests);
+    
+    /**
+        Signal ready to punch a client (host side)
+        \param  clientId    The client ID to punch
+        \return true on success, false on error
+    */
+    bool signalPunchReady(const std::string& clientId);
 
     void update();
 
@@ -130,6 +183,8 @@ private:
     Uint8 maxPlayers = 0;                                                       ///< The maximum number of players in the currently set up game
     std::string modName = "vanilla";                                            ///< The active mod name
     std::string modVersion = "";                                                ///< The active mod version
+    uint16_t stunPort = 0;                                                      ///< STUN-discovered external port (for NAT traversal)
+    std::string sessionId = "";                                                 ///< Session ID from metaserver (for hole punch coordination)
 
     Uint32 lastAnnounceUpdate = 0;                                              ///< The last time the game was announced
     Uint32 lastServerInfoListUpdate = 0;                                        ///< The last time the server list was updated by a request to the metaserver

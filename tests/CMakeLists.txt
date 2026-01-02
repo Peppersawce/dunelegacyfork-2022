@@ -1,17 +1,27 @@
-# Find CppUnit package
-find_package(CppUnit REQUIRED)
+# Find Catch2 package
+find_package(Catch2 3 REQUIRED)
 
 # Test executable
 add_executable(dunelegacy_tests)
 
-# Source files
+# Source files - new Catch2-based tests
+# Note: Catch2WithMain provides main(), no testmain.cpp needed
 target_sources(dunelegacy_tests
     PRIVATE
-        testmain.cpp
-        FileSystemTestCase/FileSystemTestCase.cpp
-        INIFileTestCase/INIFileTestCase1.cpp
-        INIFileTestCase/INIFileTestCase2.cpp
-        INIFileTestCase/INIFileTestCase3.cpp
+        PathBudgetTestCase/PathBudgetTestCase.cpp
+        NetworkManagerTestCase/NetworkManagerTestCase.cpp
+        # ENet library sources (needed for NetworkManager tests)
+        ${CMAKE_SOURCE_DIR}/src/enet/callbacks.c
+        ${CMAKE_SOURCE_DIR}/src/enet/compress.c
+        ${CMAKE_SOURCE_DIR}/src/enet/host.c
+        ${CMAKE_SOURCE_DIR}/src/enet/list.c
+        ${CMAKE_SOURCE_DIR}/src/enet/packet.c
+        ${CMAKE_SOURCE_DIR}/src/enet/peer.c
+        ${CMAKE_SOURCE_DIR}/src/enet/protocol.c
+        $<$<NOT:$<PLATFORM_ID:Windows>>:${CMAKE_SOURCE_DIR}/src/enet/unix.c>
+        $<$<PLATFORM_ID:Windows>:${CMAKE_SOURCE_DIR}/src/enet/win32.c>
+        # fmt library (needed for THROW macro in ENet headers)
+        ${CMAKE_SOURCE_DIR}/src/misc/format.cpp
 )
 
 # Include directories
@@ -20,16 +30,16 @@ target_include_directories(dunelegacy_tests
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/enet  # For enet headers
 )
 
 # Link libraries
+# Only SDL2 is needed for ENet types (Uint32, etc.)
+# SDL2_mixer and SDL2_ttf are NOT needed for these tests
 target_link_libraries(dunelegacy_tests
     PRIVATE
-        CppUnit::CppUnit
+        Catch2::Catch2WithMain
         SDL2::SDL2
-        SDL2::SDL2main
-        SDL2_mixer::SDL2_mixer
-        SDL2_ttf::SDL2_ttf
 )
 
 if(WIN32)
