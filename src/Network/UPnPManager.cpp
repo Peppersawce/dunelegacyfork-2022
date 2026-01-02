@@ -69,8 +69,7 @@ bool UPnPManager::discover(int timeoutMs) {
     // Find a valid IGD (Internet Gateway Device)
     char wanAddress[64] = {0};
     int result = UPNP_GetValidIGD(deviceList, &data->urls, &data->igdData, 
-                                   data->lanAddress, sizeof(data->lanAddress),
-                                   wanAddress, sizeof(wanAddress));
+                                   data->lanAddress, sizeof(data->lanAddress));
     
     freeUPNPDevlist(deviceList);
     

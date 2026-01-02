@@ -46,7 +46,7 @@ std::mutex Game::performanceLogMutex;
 #include <misc/exceptions.h>
 #include <misc/format.h>
 #include <misc/SDL2pp.h>
-#include <misc/DiscordManager.h>
+//#include <misc/DiscordManager.h>
 
 #include <players/HumanPlayer.h>
 
@@ -1996,10 +1996,10 @@ void Game::runMainLoop() {
             }
         }
         // Use human count for current players, total slots for max party size
-        DiscordManager::instance().setMultiplayerGame(houseName, mapName, humanPlayerCount, totalPlayerSlots);
+        //DiscordManager::instance().setMultiplayerGame(houseName, mapName, humanPlayerCount, totalPlayerSlots);
     } else {
         bool isCampaign = (gameInitSettings.getGameType() == GameType::Campaign);
-        DiscordManager::instance().setInGame(houseName, mapName, isCampaign);
+        //DiscordManager::instance().setInGame(houseName, mapName, isCampaign);
     }
 
     int frameStart = SDL_GetTicks();
@@ -2030,12 +2030,12 @@ void Game::runMainLoop() {
         // Token budget is now the only gate (deterministic)
         
         // Update Discord Rich Presence callbacks (once per second to avoid overhead)
-        static Uint32 lastDiscordUpdate = 0;
+        /*static Uint32 lastDiscordUpdate = 0;
         Uint32 discordNow = SDL_GetTicks();
         if (discordNow - lastDiscordUpdate >= 1000) {
             DiscordManager::instance().update();
             lastDiscordUpdate = discordNow;
-        }
+        }*/
         
         renderFrame();
 

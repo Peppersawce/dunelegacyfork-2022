@@ -299,7 +299,7 @@ target_sources(dunelegacy
         Trigger/TimeoutTrigger.cpp
 
         # misc
-        misc/DiscordManager.cpp
+        #misc/DiscordManager.cpp
         misc/draw_util.cpp
         misc/FileSystem.cpp
         misc/fnkdat.cpp
@@ -381,11 +381,10 @@ target_link_libraries(dunelegacy
     PRIVATE
         $<TARGET_NAME_IF_EXISTS:SDL2::SDL2main>
         $<IF:$<TARGET_EXISTS:SDL2::SDL2>,SDL2::SDL2,SDL2::SDL2-static>
-        $<IF:$<TARGET_EXISTS:SDL2_mixer::SDL2_mixer>,SDL2_mixer::SDL2_mixer,SDL2_mixer::SDL2_mixer-static>
+        ${SDL2_MIXER_LIBRARIES}
         $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>
         CURL::libcurl
-        miniupnpc::miniupnpc
-        ${DISCORD_RPC_LIBRARY}
+        ${MINIUPNPC_LIBRARY}
 )
 
 if(WIN32)

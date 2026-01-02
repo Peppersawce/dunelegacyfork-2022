@@ -42,7 +42,7 @@
 
 #include <INIMap/INIMapPreviewCreator.h>
 
-#include <misc/DiscordManager.h>
+//#include <misc/DiscordManager.h>
 
 #include <sand.h>
 #include <globals.h>
@@ -446,11 +446,11 @@ CustomGamePlayers::CustomGamePlayers(const GameInitSettings& newGameInitSettings
         }
         
         // Update Discord Rich Presence for multiplayer lobby
-        updateDiscordLobbyPresence();
+        //updateDiscordLobbyPresence();
     }
 }
 
-void CustomGamePlayers::updateDiscordLobbyPresence() {
+/*void CustomGamePlayers::updateDiscordLobbyPresence() {
     if(pNetworkManager == nullptr) return;
     
     std::string mapName = getBasename(gameInitSettings.getFilename(), true);
@@ -464,7 +464,7 @@ void CustomGamePlayers::updateDiscordLobbyPresence() {
     } else {
         DiscordManager::instance().setInLobby(gameInitSettings.getServername(), mapName);
     }
-}
+}*/
 
 CustomGamePlayers::~CustomGamePlayers()
 {
@@ -605,7 +605,7 @@ void CustomGamePlayers::onReceiveChangeEventList(const ChangeEventList& changeEv
     }
     
     // Update Discord presence when lobby state changes (players join/leave/change slots)
-    updateDiscordLobbyPresence();
+    //updateDiscordLobbyPresence();
 }
 
 ChangeEventList CustomGamePlayers::getChangeEventList()
@@ -1001,11 +1001,11 @@ void CustomGamePlayers::checkAllClientsReady() {
         disableAllDropDownBoxes();
         
         // Send Discord presence with game details
-        updateDiscordGameStarting();
+        //updateDiscordGameStarting();
     }
 }
 
-void CustomGamePlayers::updateDiscordGameStarting() {
+/*void CustomGamePlayers::updateDiscordGameStarting() {
     // Build player details string: "Atreides: Player1, Harkonnen: AIBot, ..."
     std::string playerDetails;
     int playerCount = 0;
@@ -1073,7 +1073,7 @@ void CustomGamePlayers::updateDiscordGameStarting() {
             metaServer->announceGameStart(mapName, modName, playerDetails);
         }
     }
-}
+}*/
 
 void CustomGamePlayers::onNext()
 {
@@ -1615,7 +1615,7 @@ void CustomGamePlayers::onPeerDisconnected(const std::string& playername, bool b
         addInfoMessage(playername + " disconnected!");
         
         // Update Discord presence when player count changes
-        updateDiscordLobbyPresence();
+        //updateDiscordLobbyPresence();
     }
 }
 
@@ -1630,7 +1630,7 @@ void CustomGamePlayers::onStartGame(unsigned int timeLeft) {
     disableAllDropDownBoxes();
     
     // Update Discord presence with game starting details (client side)
-    updateDiscordGameStarting();
+    //updateDiscordGameStarting();
 }
 
 void CustomGamePlayers::setPlayer2Slot(const std::string& playername, int slot) {

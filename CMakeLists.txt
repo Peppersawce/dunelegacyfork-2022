@@ -126,8 +126,8 @@ if(NOT APPLE)
     add_custom_target(copy_data ALL
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         "${CMAKE_SOURCE_DIR}/data/"
-        "${CMAKE_BINARY_DIR}/bin/"
-        COMMENT "Copying data files directly to bin directory"
+        "${CMAKE_INSTALL_DATADIR}/${PROJECT_NAME}"
+        COMMENT "Copying data files directly to data directory"
     )
     
     # Add dependency to ensure data files are copied after main target is built
@@ -176,7 +176,7 @@ if(NOT APPLE)
 endif()
 
 # Install desktop file and icons on Linux
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT HAIKU)
     install(FILES dunelegacy.desktop
         DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
     )
@@ -330,7 +330,7 @@ elseif(APPLE)
         WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
         COMMENT "Building macOS DMG installer (manual hdiutil - bypasses CPack caching issues)..."
     )
-else()
+elseif(NOT HAIKU)
     set(CPACK_GENERATOR "DEB;RPM;TGZ")
     set(CPACK_DEBIAN_PACKAGE_SECTION "games")
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "libsdl2-2.0-0, libsdl2-mixer-2.0-0, libsdl2-ttf-2.0-0")

@@ -38,7 +38,7 @@
 #include <Menu/MainMenu.h>
 #include <Menu/OptionsMenu.h>
 
-#include <misc/DiscordManager.h>
+//#include <misc/DiscordManager.h>
 
 #include <misc/fnkdat.h>
 #include <misc/FileSystem.h>
@@ -1089,11 +1089,11 @@ int main(int argc, char *argv[]) {
                 SDL_ShowCursor(SDL_ENABLE);
 
                 // Initialize Discord Rich Presence
-                DiscordManager::instance().initialize();
+                /*DiscordManager::instance().initialize();
                 if (!settings.discord.webhookUrl.empty()) {
                     DiscordManager::instance().setWebhookUrl(settings.discord.webhookUrl);
                     SDL_Log("Discord webhook configured");
-                }
+                }*/
 
                 SDL_Log("Starting main menu...");
                 { // Scope
@@ -1150,7 +1150,7 @@ int main(int argc, char *argv[]) {
             }
 
             if(bExitGame == true) {
-                DiscordManager::instance().shutdown();
+                //DiscordManager::instance().shutdown();
                 TTF_Quit();
                 SDL_Quit();
             }
